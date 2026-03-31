@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { rankCommandCandidates } from "../logic.mjs";
+import { rankCommandCandidates } from "../lib/logic.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const casesPath = path.join(__dirname, "golden-cases.json");

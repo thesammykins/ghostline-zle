@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { loadConfig } from "../config.mjs";
+import { loadConfig } from "../lib/config.mjs";
 
 const execFileAsync = promisify(execFile);
 

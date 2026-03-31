@@ -43,7 +43,7 @@ Rules:
 - Model quick config: `config.json` → `model.default`, or override with `COPILOT_ZLE_MODEL`.
 - Env overrides: `COPILOT_ZLE_TOOLS_ALLOWLIST`, `COPILOT_ZLE_TOOLS_DEVOPS`.
 - Optional override path: `COPILOT_ZLE_CONFIG_FILE`.
-- SDK patch hook: `./patch-copilot-sdk.mjs`.
+- SDK patch hook: `./scripts/patch-copilot-sdk.mjs`.
 
 ## Tooling rules
 
@@ -79,7 +79,7 @@ Rules:
 
 ## Daemon
 
-- TCP daemon (`copilot-daemon.mjs --tcp`) eliminates cold-start latency.
+- TCP daemon (`lib/copilot-daemon.mjs --tcp`) eliminates cold-start latency.
 - State file: `/tmp/copilot-zle-daemon-${UID}.json` (port + PID).
 - Idle timeout: configurable, default 5 minutes. Daemon auto-exits.
 - Widget tries daemon first, falls back to subprocess.
@@ -95,6 +95,7 @@ Rules:
 ## NL auto-detection
 
 - Pure-ZSH heuristic: `$commands`/`$aliases`/`$functions` lookup + word count.
+- Leading env assignments are treated as shell commands so valid input such as `MOTD_FORCE=1 bash "scripts/motd.sh"` is not routed into AI generation.
 - Intercepts `accept-line`. `Esc+Enter` bypasses to force shell execution.
 - Default off (`nlDetection.enabled: false`).
 
@@ -143,7 +144,7 @@ Rules:
 ## Debugging
 
 - Set `COPILOT_ZLE_DEBUG=1` to log to `/tmp/copilot-zle-debug.log`.
-- Run `node ./copilot-helper.test.mjs` for helper-level regression checks.
+- Run `node ./tests/copilot-helper.test.mjs` for helper-level regression checks.
 
 ## What the model sees (vs. this file)
 
@@ -151,25 +152,25 @@ This file is developer guidance for humans and agents editing the plugin code. I
 
 The model's behavior is governed by two files:
 
-1. **`copilot-service.mjs` → `systemPrompt()`**: The hardcoded system prompt with environment block, rules, and examples. This is where tool preferences (fd over find, rg over grep, etc.) and macOS-specific guidance live.
+1. **`lib/copilot-service.mjs` → `systemPrompt()`**: The hardcoded system prompt with environment block, rules, and examples. This is where tool preferences (fd over find, rg over grep, etc.) and macOS-specific guidance live.
 2. **`policy.txt`**: Safety policy and command templates. Appended to the system prompt.
 
-If the model generates bad commands (wrong OS flags, ignoring installed tools, wrong directory), fix the system prompt in `copilot-service.mjs` and/or the templates in `policy.txt` — not this file.
+If the model generates bad commands (wrong OS flags, ignoring installed tools, wrong directory), fix the system prompt in `lib/copilot-service.mjs` and/or the templates in `policy.txt` — not this file.
 
 ## Known gotchas
 
 - `@github/copilot-sdk` on Node 24/25 still needs the `vscode-jsonrpc/node` import patched to `node.js`.
-- Preserve the post-install patch flow in `patch-copilot-sdk.mjs` unless upstream fully resolves it.
+- Preserve the post-install patch flow in `scripts/patch-copilot-sdk.mjs` unless upstream fully resolves it.
 
 ## References
 
 - Policy: `./policy.txt`
-- Copilot helper: `./copilot-helper.mjs`
-- Helper tests: `./copilot-helper.test.mjs`
-- SDK patch: `./patch-copilot-sdk.mjs`
+- Copilot helper: `./lib/copilot-helper.mjs`
+- Helper tests: `./tests/copilot-helper.test.mjs`
+- SDK patch: `./scripts/patch-copilot-sdk.mjs`
 - Tools: `./tools/index.mjs`
 - Config: `./config.json`
 - Schema: `./config.schema.json`
-- Flight log: `./flight-log.mjs`
-- Project context: `./project-context.mjs`
+- Flight log: `./lib/flight-log.mjs`
+- Project context: `./lib/project-context.mjs`
 - User templates: `~/.config/copilot-zle/templates.txt`

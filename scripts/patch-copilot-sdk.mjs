@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const pluginDir = path.dirname(fileURLToPath(import.meta.url));
-const sessionFile = path.join(pluginDir, "node_modules/@github/copilot-sdk/dist/session.js");
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const repoDir = path.dirname(scriptDir);
+const sessionFile = path.join(repoDir, "node_modules/@github/copilot-sdk/dist/session.js");
 const brokenImport = 'from "vscode-jsonrpc/node"';
 const fixedImport = 'from "vscode-jsonrpc/node.js"';
 

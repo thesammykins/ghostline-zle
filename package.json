@@ -6,9 +6,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "postinstall": "node ./patch-copilot-sdk.mjs",
-    "test": "node ./copilot-helper.test.mjs && node ./flight-log.test.mjs && node ./project-context.test.mjs",
-    "check": "npm test && zsh -n ./copilot-zle.zsh && zsh -n ./ghostline-zle.zsh"
+    "postinstall": "node ./scripts/patch-copilot-sdk.mjs",
+    "install:ghostty": "bash ./scripts/install.sh --write-zshrc",
+    "test": "node ./tests/copilot-helper.test.mjs && node ./tests/flight-log.test.mjs && node ./tests/project-context.test.mjs && zsh ./tests/nl-detection.test.zsh && zsh ./tests/failure-indicator.test.zsh && zsh ./tests/message-queue.test.zsh && node ./tests/install-script.test.mjs",
+    "check": "npm test && zsh -n ./copilot-zle.zsh && zsh -n ./ghostline-zle.zsh && zsh -n ./shell/copilot-zle-core.zsh"
   },
   "keywords": [
     "zsh",

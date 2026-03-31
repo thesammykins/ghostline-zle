@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { resolveModel, sanitizeCommand, parseInput, buildContextBlock } from "./copilot-helper.mjs";
-import { loadConfig } from "./config.mjs";
+import { resolveModel, sanitizeCommand, parseInput, buildContextBlock } from "../lib/copilot-helper.mjs";
+import { loadConfig } from "../lib/config.mjs";
 
 const baseConfig = {
   model: { default: "gpt-5-mini" },
@@ -348,7 +348,7 @@ const originalEnv = {
   COPILOT_ZLE_TOOL_TIMEOUT_MS: process.env.COPILOT_ZLE_TOOL_TIMEOUT_MS,
 };
 
-process.env.COPILOT_ZLE_CONFIG_FILE = new URL("./config.json", import.meta.url).pathname;
+process.env.COPILOT_ZLE_CONFIG_FILE = new URL("../config.json", import.meta.url).pathname;
 process.env.COPILOT_ZLE_MODEL = "";
 process.env.COPILOT_ZLE_TOOL_TIMEOUT_MS = "100";
 

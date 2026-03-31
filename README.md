@@ -1,44 +1,34 @@
-```text
-░░▒▒▓▓  ghostline-zle  ▓▓▒▒░░
-            >_
-```
-
 # ghostline-zle
 
-`ghostline-zle` is the public-facing brand for this ZSH widget, which turns natural language into a single raw shell command without leaving the prompt.
+`ghostline-zle` is a Ghostty-first `zsh` integration that turns natural language into a single raw shell command.
 
-The repository and some internal identifiers still use `copilot-zle` for compatibility while the user-facing branding shifts toward `ghostline-zle`.
+It is not a chat interface. It fills your command buffer with one command for you to review and run.
 
-It is designed for command generation, not chat. The model sees your current directory, shell, terminal, recent history, git state, aliases, and failed-command stderr so it can produce environment-aware one-liners for macOS `zsh`.
+The project still keeps `copilot-zle` compatibility names for older installs, but new setup should use `ghostline-zle.zsh`.
 
-## What it does
+## Quick start
 
-- Generates one shell command line from natural language.
-- Supports fix, refine, and chain workflows so you can iterate on a command in-place.
-- Can show passive next-command suggestions as ghost text.
-- Can explain the current command in the status bar.
-- Can open an interactive help menu with shortcuts and quick config actions.
-- Keeps tool use disabled by default unless you explicitly allowlist tools.
-- Records successful generations in a local flight log to improve future suggestions.
+Recommended for Ghostty users:
 
-## Core behavior
+```sh
+./scripts/install.sh --write-zshrc
+exec zsh
+```
 
-- Output is always a single shell line.
-- Tools are deny-by-default.
-- Safety policy comes from `policy.txt`.
-- The default model is `gpt-5-mini`.
-- The plugin prefers safe, non-destructive commands unless you explicitly ask otherwise.
+That flow:
 
-## Modes
+- checks for `node`, `npm`, and `jq`
+- runs `npm ci`
+- applies the Copilot SDK patch from `scripts/patch-copilot-sdk.mjs`
+- appends a Ghostty-only source block to your `~/.zshrc`
 
-- **Generate**: turn natural language into a command.
-- **Fix**: when the buffer is empty after a failed command, generate a corrected command.
-- **Refine**: modify the previous AI command.
-- **Chain**: extend the previous AI command with a pipe or next step.
-- **Suggest**: passive ghost-text next-command suggestions.
-- **NL detection**: route natural language input to AI automatically.
-- **Autofix**: proactively suggest a fix after a failed command.
-- **Explain**: show a one-line explanation for the current command.
+If you do not want the installer to edit your shell config, run:
+
+```sh
+./scripts/install.sh
+```
+
+and copy the printed source block into your `~/.zshrc` manually.
 
 ## Requirements
 
@@ -46,118 +36,97 @@ It is designed for command generation, not chat. The model sees your current dir
 - `zsh`
 - Node.js 20+
 - `jq`
-- A working GitHub Copilot setup for the underlying SDK
+- a working GitHub Copilot setup for the underlying SDK
 
-## Repository layout
+## What gets loaded
 
-- `ghostline-zle.zsh`: public-facing entrypoint
-- `copilot-zle.zsh`: ZLE widget and shell integration
-- `copilot-helper.mjs`: direct helper entry point
-- `copilot-daemon.mjs`: persistent daemon to avoid cold starts
-- `copilot-service.mjs`: Copilot SDK session handling and prompts
-- `config.json`: runtime config defaults
-- `config.schema.json`: config schema
-- `policy.txt`: required prompt policy and command templates
+- `ghostline-zle.zsh`: public entrypoint for new installs
+- `copilot-zle.zsh`: compatibility wrapper for older installs
+- `shell/copilot-zle-core.zsh`: internal shell core
+- `lib/`: Node runtime, daemon, prompt logic, and project context
+- `tools/`: optional allowlisted read-only tools
+- `config.json`: shipped runtime defaults
+- `policy.txt`: prompt policy and command templates
 
-## Setup
+## Manual setup
 
-1. Install dependencies:
+If you prefer to wire it in yourself, add this to your `~/.zshrc`:
 
-```sh
-npm ci
+```zsh
+if [[ -n "${GHOSTTY_RESOURCES_DIR:-}" || "${TERM_PROGRAM:-}" == "ghostty" ]]; then
+  source /absolute/path/to/ghostline-zle/ghostline-zle.zsh
+fi
 ```
 
-The post-install patch for the Copilot SDK runs automatically from `package.json`.
-
-2. Source the plugin from your `.zshrc` or plugin manager:
-
-```sh
-source /path/to/ghostline-zle/ghostline-zle.zsh
-```
-
-The legacy `copilot-zle.zsh` entrypoint is still present for compatibility, but new installs should prefer `ghostline-zle.zsh`.
-
-3. Restart your shell or reload your config:
+Then reload your shell:
 
 ```sh
 exec zsh
 ```
 
-The widget binds:
+If you want to use the plugin outside Ghostty too, source `ghostline-zle.zsh` without the guard.
 
-- `Ctrl+G` to generate/apply AI command behavior
-- `Ctrl+E` to explain the current command
-- `Alt+H` to open the help menu
-- `Ctrl+X H` to open the help menu without Meta-key delay
-- `Ctrl+X ]` and `Ctrl+X [` to cycle command candidates
-- `Right Arrow` or `Ctrl+F` to accept a full ghost suggestion
-- `Ctrl+Right` to accept one ghost-text word at a time
-- `Esc+Enter` to bypass natural-language detection and run the shell command as-is
+## Key bindings
 
-## Help menu
+- `Ctrl+G`: generate, retry, or apply fix mode
+- `Ctrl+E`: explain the current command
+- `Alt+H`: open the help menu
+- `Ctrl+X H`: open the help menu without Meta-key delay
+- `Ctrl+X ]` / `Ctrl+X [`: cycle AI command candidates
+- `Right Arrow` or `Ctrl+F`: accept a full ghost suggestion
+- `Ctrl+Right`: accept one ghost-text word
+- `Esc+Enter`: bypass NL detection and execute the shell command directly
 
-Press `Alt+H` to open the built-in help menu.
+## Modes
 
-If your terminal makes `Alt`/`Option` combinations feel delayed, use `Ctrl+X` then `H` instead.
+- **Generate**: turn natural language into a command
+- **Fix**: when the buffer is empty after a failed command, generate a corrected command
+- **Refine**: modify the previous AI command
+- **Chain**: extend the previous AI command with a pipe or next step
+- **Suggest**: passive ghost-text next-command suggestions
+- **NL detection**: intercept natural language and route it to AI
+- **Autofix**: proactively suggest a fix after command failures
+- **Explain**: show a one-line explanation for the current buffer command
 
-The help menu shows:
+When a suggestion or autofix flow reacts to a failed command, the status line now shows an explicit failure notice so it is clear why the plugin is preparing a follow-up.
 
-- active shortcuts
-- the current config file path
-- quick actions for viewing `README.md` and `policy.txt`
-- quick toggles for `suggest.enabled`
-- quick toggles for `nlDetection.enabled`
-- quick toggles for `autofix.enabled`
-- quick toggles for `daemon.enabled`
+## Default behavior
 
-If you want deeper customization, use the `c` action in the help menu to open the config file in `$VISUAL`, `$EDITOR`, or `vi`.
+The shipped config now keeps the more aggressive features opt-in:
+
+- `suggest.enabled = false`
+- `nlDetection.enabled = false`
+- `autofix.enabled = false`
+
+You can turn them on from the help menu or by editing `config.json`.
+
+This keeps the default install predictable and avoids false positives from natural-language interception.
 
 ## Configuration
 
-The default config lives in `./config.json`.
+The main config file is `./config.json`.
 
-You can point the plugin at a different file with:
+You can point the plugin at another config with:
 
 ```sh
 export COPILOT_ZLE_CONFIG_FILE=/absolute/path/to/config.json
 ```
 
-### Main config sections
+Useful sections:
 
-- `model`: default model selection
-- `tools`: allowlisted tools and devops toggle
-- `limits`: output, file, and timeout limits
-- `context`: recent history, git summary, failure context, and project info
-- `ui`: AI buffer highlighting
-- `daemon`: background daemon behavior
-- `suggest`: passive ghost-text suggestions
-- `nlDetection`: natural language interception
-- `autofix`: failed-command fix suggestions
-- `flightLog`: local history used for pattern memory
-- `branding`: user-facing labels and wording
+- `model`
+- `tools`
+- `limits`
+- `context`
+- `ui`
+- `daemon`
+- `suggest`
+- `nlDetection`
+- `autofix`
+- `flightLog`
+- `branding`
 
-### Branding
-
-The first public-release branding surface is intentionally user-facing only. Internal package names, env var prefixes, and on-disk paths stay stable for now.
-
-Example:
-
-```json
-{
-  "branding": {
-    "productName": "ghostline-zle",
-    "statusPrefix": "[GHOSTLINE]",
-    "errorPrefix": "[GHOSTLINE ERROR]",
-    "fixPrefix": "[GHOSTLINE FIX]",
-    "explainPrefix": "[GHOSTLINE HELP]",
-    "thinkingLabel": "WHISPERING"
-  }
-}
-```
-
-This changes the status-bar labels and spinner wording without forcing a full internal rename. You can still swap in another theme such as MCRN-flavored wording later.
-
-### Selected environment overrides
+Important overrides:
 
 - `COPILOT_ZLE_MODEL`
 - `COPILOT_ZLE_CONFIG_FILE`
@@ -171,31 +140,73 @@ This changes the status-bar labels and spinner wording without forcing a full in
 - `COPILOT_ZLE_DATA_DIR`
 - `COPILOT_ZLE_TEMPLATES_FILE`
 
+## Repository layout
+
+The root is now intentionally small:
+
+- root wrappers and user-facing files stay at the top level
+- `shell/` holds shell-only internals
+- `lib/` holds the Node runtime
+- `scripts/` holds install and patch scripts
+- `tests/` holds test runners and regression checks
+- `docs/` holds developer-facing reference material
+
+If you are looking for the implementation entrypoints:
+
+- shell core: `shell/copilot-zle-core.zsh`
+- helper: `lib/copilot-helper.mjs`
+- daemon: `lib/copilot-daemon.mjs`
+- prompt service: `lib/copilot-service.mjs`
+
 ## Tooling model
 
-Tools live in `./tools/`, but the session is created with an explicit allowlist. Non-allowlisted tools are denied before execution. This keeps the default experience command-only and minimizes risk.
+Tools are deny-by-default.
 
-## Notes for sharing
+Only explicitly allowlisted tools are added to the Copilot session, and Dev/Ops tools stay behind a separate opt-in. This keeps the default behavior command-only and lowers the risk surface.
 
-- The public-facing entrypoint is `ghostline-zle.zsh`.
-- The npm package metadata now uses the `ghostline-zle` name.
-- Internal compatibility names such as `copilot-zle.zsh` and `COPILOT_ZLE_*` env vars still remain in place.
-- User-facing branding defaults to `ghostline-zle` and can still be changed through config.
+For developer notes on tool extensibility, see `docs/tool-extensibility.md`.
 
-## Development and verification
+## Troubleshooting
 
-Run the existing checks directly:
+If setup fails:
+
+- rerun `./scripts/install.sh`
+- confirm `node -v` is 20 or newer
+- confirm `jq` is installed
+- confirm GitHub Copilot auth is working for the underlying SDK
+
+If Ghostty is open and the widget is not available:
+
+- run `exec zsh`
+- confirm your `~/.zshrc` contains the Ghostty source block
+- confirm the repo path in the source block is still correct
+
+If NL detection is too eager after you enable it:
+
+- keep `nlDetection.enabled` off by default
+- use `Esc+Enter` to force shell execution
+- note that commands with leading env assignments such as `MOTD_FORCE=1 bash "scripts/motd.sh"` are now treated as shell commands, not prose
+
+## Development
+
+Run the full checks with:
 
 ```sh
 npm run check
 ```
 
-Or run them individually:
+The current test suite covers helper logic, project context, NL-detection heuristics, installer behavior, and shell syntax checks.
+
+Useful direct commands:
 
 ```sh
-node ./copilot-helper.test.mjs
-node ./flight-log.test.mjs
-node ./project-context.test.mjs
+node ./tests/copilot-helper.test.mjs
+node ./tests/flight-log.test.mjs
+node ./tests/project-context.test.mjs
+zsh ./tests/nl-detection.test.zsh
+zsh ./tests/failure-indicator.test.zsh
+node ./tests/install-script.test.mjs
 zsh -n ./copilot-zle.zsh
 zsh -n ./ghostline-zle.zsh
+zsh -n ./shell/copilot-zle-core.zsh
 ```

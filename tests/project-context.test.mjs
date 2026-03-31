@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { sniffProjectContext, buildProjectBlock, clearCache } from "./project-context.mjs";
+import { sniffProjectContext, buildProjectBlock, clearCache } from "../lib/project-context.mjs";
 
 const testDir = path.join(os.tmpdir(), `copilot-zle-project-test-${process.pid}`);
 

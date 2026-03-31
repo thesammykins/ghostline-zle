@@ -7,7 +7,7 @@ import os from "node:os";
 const testDir = path.join(os.tmpdir(), `copilot-zle-flight-test-${process.pid}`);
 process.env.COPILOT_ZLE_DATA_DIR = testDir;
 
-const { recordGeneration, markExecuted, queryRelevant, queryFollowUps, buildFewShotBlock, getLogPath } = await import("./flight-log.mjs");
+const { recordGeneration, markExecuted, queryRelevant, queryFollowUps, buildFewShotBlock, getLogPath } = await import("../lib/flight-log.mjs");
 
 const cleanup = () => {
   try { fs.rmSync(testDir, { recursive: true, force: true }); } catch {}

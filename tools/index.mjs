@@ -1,5 +1,5 @@
 import { defineTool } from "@github/copilot-sdk";
-import { loadConfig } from "../config.mjs";
+import { loadConfig } from "../lib/config.mjs";
 import {
   denyResult,
   failureResult,

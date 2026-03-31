@@ -25,19 +25,19 @@
     "idleTimeoutSec": 300
   },
   "suggest": {
-    "enabled": true,
+    "enabled": false,
     "debounceMs": 500,
     "rateLimitMs": 2000,
     "skipCommands": ["cd", "ls", "clear", "pwd", "exit", "true", "false"],
     "ghostStyle": "fg=240"
   },
   "nlDetection": {
-    "enabled": true,
+    "enabled": false,
     "minWords": 3,
     "indicator": "[NL]"
   },
   "autofix": {
-    "enabled": true,
+    "enabled": false,
     "displayMode": "banner"
   },
   "flightLog": {
