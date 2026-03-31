@@ -8,6 +8,7 @@ import { markExecuted } from "./flight-log.mjs";
 
 const config = loadConfig();
 const DEFAULT_MODEL = process.env.COPILOT_ZLE_MODEL || config.model.default || "gpt-5-mini";
+const PRODUCT_NAME = config.branding?.productName || "Copilot ZLE";
 const DEFAULT_TIMEOUT_MS = Number.parseInt(
   process.env.COPILOT_ZLE_TIMEOUT_MS || "30000",
   10
@@ -287,12 +288,12 @@ const startTcp = () => {
       JSON.stringify({ pid: process.pid, port }),
       "utf8"
     );
-    process.stderr.write(`copilot-zle daemon listening on 127.0.0.1:${port}\n`);
+    process.stderr.write(`${PRODUCT_NAME} daemon listening on 127.0.0.1:${port}\n`);
     resetIdleTimer();
   });
 
   server.on("error", (err) => {
-    process.stderr.write(`copilot-zle daemon server error: ${err.message}\n`);
+    process.stderr.write(`${PRODUCT_NAME} daemon server error: ${err.message}\n`);
     process.exit(1);
   });
 };
@@ -340,7 +341,7 @@ if (TCP_MODE) {
   // Pre-warm the Copilot SDK so the first generate request doesn't race
   // client.start() against session creation (causes "session.idle" timeout).
   service.start().catch((err) => {
-    process.stderr.write(`copilot-zle daemon: SDK pre-warm failed: ${err.message}\n`);
+    process.stderr.write(`${PRODUCT_NAME} daemon: SDK pre-warm failed: ${err.message}\n`);
   });
 } else {
   startStdio();

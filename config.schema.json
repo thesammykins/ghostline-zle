@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Copilot ZLE Config",
+  "title": "ZLE Command Generator Config",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -262,6 +262,56 @@
         "enabled": true,
         "maxEntries": 1000,
         "fewShotCount": 3
+      }
+    },
+    "branding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "productName": {
+          "type": "string",
+          "minLength": 1,
+          "default": "ghostline-zle",
+          "description": "User-facing product name for status text and documentation examples."
+        },
+        "statusPrefix": {
+          "type": "string",
+          "minLength": 1,
+          "default": "[GHOSTLINE]",
+          "description": "Prefix used for normal status messages shown in the ZLE status area."
+        },
+        "errorPrefix": {
+          "type": "string",
+          "minLength": 1,
+          "default": "[GHOSTLINE ERROR]",
+          "description": "Prefix used for error messages shown in the ZLE status area."
+        },
+        "fixPrefix": {
+          "type": "string",
+          "minLength": 1,
+          "default": "[GHOSTLINE FIX]",
+          "description": "Prefix used for proactive fix suggestions."
+        },
+        "explainPrefix": {
+          "type": "string",
+          "minLength": 1,
+          "default": "[GHOSTLINE HELP]",
+          "description": "Prefix used for explain-mode status messages."
+        },
+        "thinkingLabel": {
+          "type": "string",
+          "minLength": 1,
+          "default": "WHISPERING",
+          "description": "Base label for thinking/status spinner text. Dots are appended automatically."
+        }
+      },
+      "default": {
+        "productName": "ghostline-zle",
+        "statusPrefix": "[GHOSTLINE]",
+        "errorPrefix": "[GHOSTLINE ERROR]",
+        "fixPrefix": "[GHOSTLINE FIX]",
+        "explainPrefix": "[GHOSTLINE HELP]",
+        "thinkingLabel": "WHISPERING"
       }
     }
   }

@@ -1,10 +1,23 @@
 {
-  "name": "copilot-zle",
-  "private": true,
+  "name": "ghostline-zle",
+  "description": "A ZSH widget that turns natural language into a single shell command.",
   "type": "module",
   "engines": {
     "node": ">=20"
   },
+  "scripts": {
+    "postinstall": "node ./patch-copilot-sdk.mjs",
+    "test": "node ./copilot-helper.test.mjs && node ./flight-log.test.mjs && node ./project-context.test.mjs",
+    "check": "npm test && zsh -n ./copilot-zle.zsh && zsh -n ./ghostline-zle.zsh"
+  },
+  "keywords": [
+    "zsh",
+    "ghostline",
+    "terminal",
+    "copilot",
+    "cli",
+    "command-generation"
+  ],
   "dependencies": {
     "@github/copilot-sdk": "^0.2.0"
   }

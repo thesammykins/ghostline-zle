@@ -361,6 +361,9 @@ assert.equal(config.context.includeGitSummary, true);
 assert.equal(config.context.includeLastFailure, true);
 assert.equal(config.ui.highlightAiBuffer, true);
 assert.equal(config.ui.highlightStyle, "underline");
+assert.equal(config.branding.productName, "ghostline-zle");
+assert.equal(config.branding.statusPrefix, "[GHOSTLINE]");
+assert.equal(config.branding.thinkingLabel, "WHISPERING");
 
 if (typeof originalEnv.COPILOT_ZLE_CONFIG_FILE === "string") {
   process.env.COPILOT_ZLE_CONFIG_FILE = originalEnv.COPILOT_ZLE_CONFIG_FILE;
@@ -388,6 +391,7 @@ if (typeof originalEnv.COPILOT_ZLE_TOOL_TIMEOUT_MS === "string") {
   assert.equal(fallbackConfig.model.default, "gpt-5-mini");
   assert.equal(fallbackConfig.context.recentHistoryCount, 5);
   assert.equal(fallbackConfig.ui.highlightStyle, "underline");
+  assert.equal(fallbackConfig.branding.productName, "ghostline-zle");
   if (typeof savedConfigFile === "string") {
     process.env.COPILOT_ZLE_CONFIG_FILE = savedConfigFile;
   } else {

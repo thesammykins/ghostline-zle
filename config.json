@@ -44,5 +44,13 @@
     "enabled": true,
     "maxEntries": 1000,
     "fewShotCount": 3
+  },
+  "branding": {
+    "productName": "ghostline-zle",
+    "statusPrefix": "[GHOSTLINE]",
+    "errorPrefix": "[GHOSTLINE ERROR]",
+    "fixPrefix": "[GHOSTLINE FIX]",
+    "explainPrefix": "[GHOSTLINE HELP]",
+    "thinkingLabel": "WHISPERING"
   }
 }

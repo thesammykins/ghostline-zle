@@ -29,12 +29,7 @@ typeset -g  _COPILOT_ZLE_PENDING_ERR=""
 typeset -g  _COPILOT_ZLE_CFG_HIGHLIGHT_ENABLED=""
 typeset -g  _COPILOT_ZLE_CFG_HIGHLIGHT_STYLE=""
 typeset -gi _COPILOT_ZLE_SPINNER_IDX=0
-typeset -ga _COPILOT_ZLE_SPINNER_FRAMES=(
-  "THINKING."
-  "THINKING.."
-  "THINKING..."
-  "THINKING...."
-)
+typeset -ga _COPILOT_ZLE_SPINNER_FRAMES=()
 # Daemon state
 typeset -gi _COPILOT_ZLE_DAEMON_PORT=0
 typeset -gi _COPILOT_ZLE_DAEMON_PID=0
@@ -55,9 +50,15 @@ typeset -g  _COPILOT_ZLE_CFG_NL_INDICATOR=""
 # Autofix state
 typeset -g  _COPILOT_ZLE_CFG_AUTOFIX_ENABLED=""
 typeset -g  _COPILOT_ZLE_CFG_AUTOFIX_MODE=""
+typeset -g  _COPILOT_ZLE_CFG_BRAND_PRODUCT_NAME=""
+typeset -g  _COPILOT_ZLE_CFG_BRAND_STATUS_PREFIX=""
+typeset -g  _COPILOT_ZLE_CFG_BRAND_ERROR_PREFIX=""
+typeset -g  _COPILOT_ZLE_CFG_BRAND_FIX_PREFIX=""
+typeset -g  _COPILOT_ZLE_CFG_BRAND_EXPLAIN_PREFIX=""
+typeset -g  _COPILOT_ZLE_CFG_BRAND_THINKING_LABEL=""
 # Stderr capture state
 typeset -g  _COPILOT_ZLE_LAST_STDERR=""
-typeset -g  _COPILOT_ZLE_STDERR_FILE="/tmp/copilot-zle-stderr-$$.log"
+typeset -g  _COPILOT_ZLE_STDERR_FILE="${COPILOT_ZLE_STDERR_FILE:-/tmp/copilot-zle-stderr-$$.log}"
 # Candidate cycling state
 typeset -ga _COPILOT_ZLE_CANDIDATES=()
 typeset -gi _COPILOT_ZLE_CANDIDATE_IDX=0
@@ -147,19 +148,199 @@ _copilot_zle_debug_log() {
   fi
 }
 
+_copilot_zle_show_message() {
+  local prefix="$1" body="$2"
+  if [[ -n "$body" ]]; then
+    zle -M "$prefix $body"
+  else
+    zle -M "$prefix"
+  fi
+}
+
+_copilot_zle_status_message() {
+  _copilot_zle_show_message "$_COPILOT_ZLE_CFG_BRAND_STATUS_PREFIX" "$1"
+}
+
+_copilot_zle_error_message() {
+  _copilot_zle_show_message "$_COPILOT_ZLE_CFG_BRAND_ERROR_PREFIX" "$1"
+}
+
+_copilot_zle_fix_message() {
+  _copilot_zle_show_message "$_COPILOT_ZLE_CFG_BRAND_FIX_PREFIX" "$1"
+}
+
+_copilot_zle_explain_message() {
+  _copilot_zle_show_message "$_COPILOT_ZLE_CFG_BRAND_EXPLAIN_PREFIX" "$1"
+}
+
+_copilot_zle_reload_cached_config() {
+  _COPILOT_ZLE_CFG_HIGHLIGHT_ENABLED="$(_copilot_zle_read_config '.ui.highlightAiBuffer' 'true')"
+  _COPILOT_ZLE_CFG_HIGHLIGHT_STYLE="$(_copilot_zle_read_config '.ui.highlightStyle' 'underline')"
+  _COPILOT_ZLE_CFG_DAEMON_ENABLED="$(_copilot_zle_read_config '.daemon.enabled' 'true')"
+  _COPILOT_ZLE_CFG_SUGGEST_ENABLED="$(_copilot_zle_read_config '.suggest.enabled' 'false')"
+  _COPILOT_ZLE_CFG_SUGGEST_GHOST_STYLE="$(_copilot_zle_read_config '.suggest.ghostStyle' 'fg=240')"
+  _COPILOT_ZLE_CFG_SUGGEST_RATE_LIMIT_MS="$(_copilot_zle_read_config '.suggest.rateLimitMs' '2000')"
+  _COPILOT_ZLE_CFG_SUGGEST_SKIP_CMDS="$(_copilot_zle_read_config '.suggest.skipCommands | join(",")' 'cd,ls,clear,pwd,exit,true,false')"
+  _COPILOT_ZLE_CFG_NL_ENABLED="$(_copilot_zle_read_config '.nlDetection.enabled' 'false')"
+  _COPILOT_ZLE_CFG_NL_MIN_WORDS="$(_copilot_zle_read_config '.nlDetection.minWords' '3')"
+  _COPILOT_ZLE_CFG_NL_INDICATOR="$(_copilot_zle_read_config '.nlDetection.indicator' '[NL]')"
+  _COPILOT_ZLE_CFG_AUTOFIX_ENABLED="$(_copilot_zle_read_config '.autofix.enabled' 'false')"
+  _COPILOT_ZLE_CFG_AUTOFIX_MODE="$(_copilot_zle_read_config '.autofix.displayMode' 'banner')"
+  _COPILOT_ZLE_CFG_BRAND_PRODUCT_NAME="$(_copilot_zle_read_config '.branding.productName' 'ghostline-zle')"
+  _COPILOT_ZLE_CFG_BRAND_STATUS_PREFIX="$(_copilot_zle_read_config '.branding.statusPrefix' '[GHOSTLINE]')"
+  _COPILOT_ZLE_CFG_BRAND_ERROR_PREFIX="$(_copilot_zle_read_config '.branding.errorPrefix' '[GHOSTLINE ERROR]')"
+  _COPILOT_ZLE_CFG_BRAND_FIX_PREFIX="$(_copilot_zle_read_config '.branding.fixPrefix' '[GHOSTLINE FIX]')"
+  _COPILOT_ZLE_CFG_BRAND_EXPLAIN_PREFIX="$(_copilot_zle_read_config '.branding.explainPrefix' '[GHOSTLINE HELP]')"
+  _COPILOT_ZLE_CFG_BRAND_THINKING_LABEL="$(_copilot_zle_read_config '.branding.thinkingLabel' 'WHISPERING')"
+  _COPILOT_ZLE_SPINNER_FRAMES=(
+    "${_COPILOT_ZLE_CFG_BRAND_THINKING_LABEL}."
+    "${_COPILOT_ZLE_CFG_BRAND_THINKING_LABEL}.."
+    "${_COPILOT_ZLE_CFG_BRAND_THINKING_LABEL}..."
+    "${_COPILOT_ZLE_CFG_BRAND_THINKING_LABEL}...."
+  )
+}
+
 # Cache UI config at load time (safe to fork jq here, outside ZLE context)
-_COPILOT_ZLE_CFG_HIGHLIGHT_ENABLED="$(_copilot_zle_read_config '.ui.highlightAiBuffer' 'true')"
-_COPILOT_ZLE_CFG_HIGHLIGHT_STYLE="$(_copilot_zle_read_config '.ui.highlightStyle' 'underline')"
-_COPILOT_ZLE_CFG_DAEMON_ENABLED="$(_copilot_zle_read_config '.daemon.enabled' 'true')"
-_COPILOT_ZLE_CFG_SUGGEST_ENABLED="$(_copilot_zle_read_config '.suggest.enabled' 'false')"
-_COPILOT_ZLE_CFG_SUGGEST_GHOST_STYLE="$(_copilot_zle_read_config '.suggest.ghostStyle' 'fg=240')"
-_COPILOT_ZLE_CFG_SUGGEST_RATE_LIMIT_MS="$(_copilot_zle_read_config '.suggest.rateLimitMs' '2000')"
-_COPILOT_ZLE_CFG_SUGGEST_SKIP_CMDS="$(_copilot_zle_read_config '.suggest.skipCommands | join(",")' 'cd,ls,clear,pwd,exit,true,false')"
-_COPILOT_ZLE_CFG_NL_ENABLED="$(_copilot_zle_read_config '.nlDetection.enabled' 'false')"
-_COPILOT_ZLE_CFG_NL_MIN_WORDS="$(_copilot_zle_read_config '.nlDetection.minWords' '3')"
-_COPILOT_ZLE_CFG_NL_INDICATOR="$(_copilot_zle_read_config '.nlDetection.indicator' '[NL]')"
-_COPILOT_ZLE_CFG_AUTOFIX_ENABLED="$(_copilot_zle_read_config '.autofix.enabled' 'false')"
-_COPILOT_ZLE_CFG_AUTOFIX_MODE="$(_copilot_zle_read_config '.autofix.displayMode' 'banner')"
+_copilot_zle_reload_cached_config
+
+_copilot_zle_open_with_editor() {
+  local target="$1" label="$2"
+  [[ -n "$target" ]] || return 1
+
+  local -a editor_cmd
+  editor_cmd=( ${(z)${VISUAL:-${EDITOR:-vi}}} )
+  (( ${#editor_cmd[@]} > 0 )) || editor_cmd=(vi)
+
+  zle -I
+  print -r -- ""
+  print -r -- "opening ${label} with ${editor_cmd[1]}..."
+  command "${editor_cmd[@]}" "$target"
+  zle reset-prompt
+  zle -R
+}
+
+_copilot_zle_open_with_pager() {
+  local target="$1" label="$2"
+  [[ -f "$target" ]] || {
+    _copilot_zle_error_message "${label} not found."
+    return 1
+  }
+
+  local -a pager_cmd
+  if [[ -n "${PAGER:-}" ]]; then
+    pager_cmd=( ${(z)${PAGER}} )
+  elif [[ -x "$(command -v less)" ]]; then
+    pager_cmd=(less -R)
+  else
+    pager_cmd=(cat)
+  fi
+
+  zle -I
+  print -r -- ""
+  print -r -- "opening ${label}..."
+  command "${pager_cmd[@]}" "$target"
+  zle reset-prompt
+  zle -R
+}
+
+_copilot_zle_toggle_config_boolean() {
+  local key_path="$1" label="$2"
+  local config_path
+  config_path="${_COPILOT_ZLE_CONFIG_PATH:-${COPILOT_ZLE_CONFIG_FILE:-$(_copilot_zle_helpers_dir)/config.json}}"
+
+  local new_value
+  new_value="$(
+    NODE_NO_WARNINGS=1 node -e '
+      const fs = require("node:fs");
+      const [filePath, dottedPath] = process.argv.slice(1);
+      let config = {};
+      if (fs.existsSync(filePath)) {
+        try {
+          const raw = fs.readFileSync(filePath, "utf8").trim();
+          if (raw) config = JSON.parse(raw);
+        } catch (error) {
+          console.error(error.message);
+          process.exit(1);
+        }
+      }
+      const parts = dottedPath.split(".");
+      let cursor = config;
+      for (let index = 0; index < parts.length - 1; index += 1) {
+        const part = parts[index];
+        if (!cursor[part] || typeof cursor[part] !== "object" || Array.isArray(cursor[part])) {
+          cursor[part] = {};
+        }
+        cursor = cursor[part];
+      }
+      const last = parts[parts.length - 1];
+      cursor[last] = !Boolean(cursor[last]);
+      fs.writeFileSync(filePath, JSON.stringify(config, null, 2) + "\n", "utf8");
+      process.stdout.write(cursor[last] ? "enabled" : "disabled");
+    ' "$config_path" "$key_path" 2>/dev/null
+  )"
+
+  if [[ -z "$new_value" ]]; then
+    _copilot_zle_error_message "Could not update ${label}."
+    return 1
+  fi
+
+  _copilot_zle_reload_cached_config
+  _copilot_zle_status_message "${label}: ${new_value}. Config saved to ${config_path}"
+}
+
+copilot_zle_help() {
+  local helpers_dir config_path readme_path policy_path
+  helpers_dir="$(_copilot_zle_helpers_dir)"
+  config_path="${_COPILOT_ZLE_CONFIG_PATH:-${COPILOT_ZLE_CONFIG_FILE:-$helpers_dir/config.json}}"
+  readme_path="$helpers_dir/README.md"
+  policy_path="$helpers_dir/policy.txt"
+
+  zle -I
+  print -r -- ""
+  print -r -- "░░▒▒▓▓  ghostline-zle  ▓▓▒▒░░"
+  print -r -- "            >_"
+  print -r -- ""
+  print -r -- "shortcuts"
+  print -r -- "  Ctrl+G        generate / retry / fix mode"
+  print -r -- "  Ctrl+E        explain current buffer command"
+  print -r -- "  Alt+H         open this help menu"
+  print -r -- "  Ctrl+X H      open this help menu without Meta-key delay"
+  print -r -- "  Alt+] / Alt+[ cycle AI candidates"
+  print -r -- "  Right / Ctrl+F accept full ghost suggestion"
+  print -r -- "  Ctrl+Right    accept one ghost word"
+  print -r -- "  Esc+Enter     bypass NL detection"
+  print -r -- ""
+  print -r -- "quick options"
+  print -r -- "  s  toggle suggest.enabled      (${_COPILOT_ZLE_CFG_SUGGEST_ENABLED})"
+  print -r -- "  n  toggle nlDetection.enabled  (${_COPILOT_ZLE_CFG_NL_ENABLED})"
+  print -r -- "  a  toggle autofix.enabled      (${_COPILOT_ZLE_CFG_AUTOFIX_ENABLED})"
+  print -r -- "  d  toggle daemon.enabled       (${_COPILOT_ZLE_CFG_DAEMON_ENABLED})"
+  print -r -- ""
+  print -r -- "files"
+  print -r -- "  c  edit config    ${config_path}"
+  print -r -- "  r  view README    ${readme_path}"
+  print -r -- "  p  view policy    ${policy_path}"
+  print -r -- "  q  close"
+  print -n -- "choose action: "
+
+  local choice=""
+  read -rk 1 choice
+  print -r -- ""
+
+  case "$choice" in
+    [sS]) _copilot_zle_toggle_config_boolean "suggest.enabled" "suggestions" ;;
+    [nN]) _copilot_zle_toggle_config_boolean "nlDetection.enabled" "natural language detection" ;;
+    [aA]) _copilot_zle_toggle_config_boolean "autofix.enabled" "autofix" ;;
+    [dD]) _copilot_zle_toggle_config_boolean "daemon.enabled" "daemon" ;;
+    [cC]) _copilot_zle_open_with_editor "$config_path" "config" ;;
+    [rR]) _copilot_zle_open_with_pager "$readme_path" "README" ;;
+    [pP]) _copilot_zle_open_with_pager "$policy_path" "policy" ;;
+    *) ;;
+  esac
+
+  zle reset-prompt
+  zle -R
+}
 
 # ── Flight Log Execution Tracking ────────────────────────────────────
 _copilot_zle_mark_executed() {
@@ -194,7 +375,7 @@ _copilot_zle_mark_executed() {
 
 # ── Daemon Lifecycle ─────────────────────────────────────────────────
 _copilot_zle_daemon_state_file() {
-  echo "/tmp/copilot-zle-daemon-${UID}.json"
+  echo "${COPILOT_ZLE_DAEMON_STATE_FILE:-/tmp/copilot-zle-daemon-${UID}.json}"
 }
 
 _copilot_zle_daemon_is_running() {
@@ -497,7 +678,7 @@ _copilot_zle_cycle_next() {
   BUFFER="$candidate"
   CURSOR=${#BUFFER}
   _COPILOT_ZLE_LAST_AI_COMMAND="$candidate"
-  zle -M "[COPILOT] CANDIDATE ${_COPILOT_ZLE_CANDIDATE_IDX}/${#_COPILOT_ZLE_CANDIDATES}"
+  _copilot_zle_status_message "CANDIDATE ${_COPILOT_ZLE_CANDIDATE_IDX}/${#_COPILOT_ZLE_CANDIDATES}"
   zle -R
 }
 
@@ -509,7 +690,7 @@ _copilot_zle_cycle_prev() {
   BUFFER="$candidate"
   CURSOR=${#BUFFER}
   _COPILOT_ZLE_LAST_AI_COMMAND="$candidate"
-  zle -M "[COPILOT] CANDIDATE ${_COPILOT_ZLE_CANDIDATE_IDX}/${#_COPILOT_ZLE_CANDIDATES}"
+  _copilot_zle_status_message "CANDIDATE ${_COPILOT_ZLE_CANDIDATE_IDX}/${#_COPILOT_ZLE_CANDIDATES}"
   zle -R
 }
 
@@ -561,7 +742,7 @@ _copilot_zle_autofix_result_handler() {
       if [[ "$_COPILOT_ZLE_CFG_AUTOFIX_MODE" == "ghost" ]]; then
         _copilot_zle_ghost_render "$cmd"
       else
-        zle -M "[COPILOT FIX] $_COPILOT_ZLE_LAST_EXECUTED_COMMAND → $cmd  (Ctrl+G to apply)"
+        _copilot_zle_fix_message "$_COPILOT_ZLE_LAST_EXECUTED_COMMAND -> $cmd  (Ctrl+G to apply)"
         _COPILOT_ZLE_LAST_AI_COMMAND="$cmd"
         _COPILOT_ZLE_LAST_AI_PROMPT="fix the last command that failed"
       fi
@@ -702,21 +883,21 @@ _copilot_zle_preflight() {
   local helpers_dir
   helpers_dir="$(_copilot_zle_helpers_dir)"
   if [[ ! -f "$helpers_dir/copilot-helper.mjs" ]]; then
-    zle -M "[COPILOT ERROR] COPILOT HELPER MISSING."
+    _copilot_zle_error_message "${_COPILOT_ZLE_CFG_BRAND_PRODUCT_NAME} helper missing."
     return 1
   fi
   if [[ ! -d "$helpers_dir/node_modules/@github/copilot-sdk" ]]; then
-    zle -M "[COPILOT ERROR] COPILOT SDK NOT INSTALLED. RUN npm ci IN THE PLUGIN DIRECTORY"
+    _copilot_zle_error_message "GitHub Copilot SDK not installed. Run npm ci in the plugin directory."
     return 1
   fi
   if [[ ! -x "$(command -v node)" ]]; then
-    zle -M "[COPILOT ERROR] NODE NOT FOUND."
+    _copilot_zle_error_message "Node not found."
     return 1
   fi
   local node_major
   node_major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
   if (( node_major < 20 )); then
-    zle -M "[COPILOT ERROR] NODE 20+ REQUIRED FOR COPILOT SDK."
+    _copilot_zle_error_message "Node 20+ required for the GitHub Copilot SDK."
     return 1
   fi
   return 0
@@ -735,7 +916,7 @@ _copilot_zle_spinner_handler() {
   fi
   if (( _COPILOT_ZLE_ASYNC_ACTIVE )); then
     _COPILOT_ZLE_SPINNER_IDX=$(( (_COPILOT_ZLE_SPINNER_IDX % ${#_COPILOT_ZLE_SPINNER_FRAMES[@]}) + 1 ))
-    zle -M "[COPILOT] ${_COPILOT_ZLE_SPINNER_FRAMES[$_COPILOT_ZLE_SPINNER_IDX]}"
+    _copilot_zle_status_message "${_COPILOT_ZLE_SPINNER_FRAMES[$_COPILOT_ZLE_SPINNER_IDX]}"
     zle -R
   fi
 }
@@ -797,28 +978,28 @@ _copilot_zle_apply_result() {
   if [[ -z "$command" ]]; then
     case "$error_code" in
       copilot_cli_missing)
-        zle -M "[COPILOT ERROR] COPILOT CLI MISSING."
+        _copilot_zle_error_message "Required CLI dependency missing."
         ;;
       copilot_auth_required)
-        zle -M "[COPILOT ERROR] COPILOT AUTH REQUIRED."
+        _copilot_zle_error_message "GitHub Copilot auth required."
         ;;
       copilot_model_rejected)
-        zle -M "[COPILOT ERROR] MODEL REJECTED: $COPILOT_ZLE_MODEL"
+        _copilot_zle_error_message "Model rejected: $COPILOT_ZLE_MODEL"
         ;;
       copilot_timeout)
-        zle -M "[COPILOT ERROR] COPILOT TIMEOUT."
+        _copilot_zle_error_message "${_COPILOT_ZLE_CFG_BRAND_PRODUCT_NAME} request timed out."
         ;;
       copilot_sdk_missing)
-        zle -M "[COPILOT ERROR] COPILOT SDK NOT INSTALLED. RUN npm ci IN THE PLUGIN DIRECTORY"
+        _copilot_zle_error_message "GitHub Copilot SDK not installed. Run npm ci in the plugin directory."
         ;;
       copilot_node_required)
-        zle -M "[COPILOT ERROR] NODE 20+ REQUIRED FOR COPILOT SDK."
+        _copilot_zle_error_message "Node 20+ required for the GitHub Copilot SDK."
         ;;
       *)
         if [[ -n "$error" ]]; then
-          zle -M "[COPILOT ERROR] COPILOT FAILED. CHECK /tmp/copilot-zle-debug.log"
+          _copilot_zle_error_message "${_COPILOT_ZLE_CFG_BRAND_PRODUCT_NAME} failed. Check $COPILOT_ZLE_DEBUG_LOG"
         else
-          zle -M "[COPILOT ERROR] NO COMMAND RETURNED."
+          _copilot_zle_error_message "No command returned."
         fi
         ;;
     esac
@@ -869,16 +1050,16 @@ _copilot_zle_apply_result() {
 
   case "$mode" in
     fix)
-      zle -M "[COPILOT] FIX APPLIED. REVIEW BEFORE EXECUTION.${_copilot_dry_warn}"
+      _copilot_zle_status_message "FIX APPLIED. REVIEW BEFORE EXECUTION.${_copilot_dry_warn}"
       ;;
     refine)
-      zle -M "[COPILOT] COMMAND REFINED. REVIEW BEFORE EXECUTION.${_copilot_dry_warn}"
+      _copilot_zle_status_message "COMMAND REFINED. REVIEW BEFORE EXECUTION.${_copilot_dry_warn}"
       ;;
     chain)
-      zle -M "[COPILOT] PIPELINE EXTENDED. REVIEW BEFORE EXECUTION.${_copilot_dry_warn}"
+      _copilot_zle_status_message "PIPELINE EXTENDED. REVIEW BEFORE EXECUTION.${_copilot_dry_warn}"
       ;;
     *)
-      zle -M "[COPILOT] COMMAND RECEIVED. REVIEW BEFORE EXECUTION.${_copilot_dry_warn}"
+      _copilot_zle_status_message "COMMAND RECEIVED. REVIEW BEFORE EXECUTION.${_copilot_dry_warn}"
       ;;
   esac
   zle -R
@@ -901,7 +1082,7 @@ _copilot_zle_cancel_async() {
     builtin exec {_COPILOT_ZLE_SPINNER_FD}<&- 2>/dev/null
     _COPILOT_ZLE_SPINNER_FD=""
   fi
-  zle -M "[COPILOT] REQUEST CANCELLED."
+  _copilot_zle_status_message "REQUEST CANCELLED."
   zle -R
 }
 
@@ -974,7 +1155,7 @@ copilot_zle_generate() {
   _copilot_zle_debug_log "widget fired: BUFFER='$user_input'"
 
   if [[ ! -x "$(command -v jq)" ]]; then
-    zle -M "[COPILOT ERROR] JQ NOT FOUND."
+    _copilot_zle_error_message "jq not found."
     return
   fi
 
@@ -1001,35 +1182,35 @@ copilot_zle_generate() {
         if [[ "$_COPILOT_ZLE_CFG_HIGHLIGHT_ENABLED" == "true" && "$_COPILOT_ZLE_CFG_HIGHLIGHT_STYLE" != "none" ]]; then
           region_highlight=("0 ${#BUFFER} ${_COPILOT_ZLE_CFG_HIGHLIGHT_STYLE}")
         fi
-        zle -M "[COPILOT] FIX APPLIED. REVIEW BEFORE EXECUTION."
+        _copilot_zle_status_message "FIX APPLIED. REVIEW BEFORE EXECUTION."
         zle -R
         _copilot_zle_debug_log "fix shortcut: applied cached fix '$_COPILOT_ZLE_LAST_AI_COMMAND'"
         return
       fi
       effective_prompt="fix the last command that failed"
-      zle -M "[COPILOT] FIX MODE: ANALYZING FAILED COMMAND..."
+      _copilot_zle_status_message "FIX MODE: ANALYZING FAILED COMMAND..."
       ;;
     refine)
       effective_prompt="$user_input"
-      zle -M "[COPILOT] REFINE MODE: ADJUSTING PRIOR COMMAND..."
+      _copilot_zle_status_message "REFINE MODE: ADJUSTING PRIOR COMMAND..."
       ;;
     chain)
       effective_prompt="$user_input"
-      zle -M "[COPILOT] CHAIN MODE: EXTENDING PIPELINE..."
+      _copilot_zle_status_message "CHAIN MODE: EXTENDING PIPELINE..."
       ;;
     generate)
       if [[ -z "$user_input" ]]; then
         if [[ -n "$_COPILOT_ZLE_LAST_AI_QUERY" ]]; then
           user_input="$_COPILOT_ZLE_LAST_AI_QUERY"
           effective_prompt="$user_input"
-          zle -M "[COPILOT] RETRYING LAST QUERY: $user_input"
+          _copilot_zle_status_message "RETRYING LAST QUERY: $user_input"
         else
           return
         fi
       else
         effective_prompt="$user_input"
         _COPILOT_ZLE_LAST_AI_QUERY="$user_input"
-        zle -M "[COPILOT] THINKING..."
+        _copilot_zle_status_message "${_COPILOT_ZLE_CFG_BRAND_THINKING_LABEL}..."
       fi
       ;;
   esac
@@ -1043,7 +1224,7 @@ copilot_zle_generate() {
   _copilot_zle_debug_log "payload: $payload"
 
   if [[ -z "$payload" ]]; then
-    zle -M "[COPILOT ERROR] PAYLOAD BUILD FAILED."
+    _copilot_zle_error_message "Payload build failed."
     return
   fi
 
@@ -1084,9 +1265,9 @@ _copilot_zle_explain_result_handler() {
     IFS='' read -rd '' -u $fd explanation 2>/dev/null
 
     if [[ -n "$explanation" ]]; then
-      zle -M "[COPILOT INTEL] $explanation"
+      _copilot_zle_explain_message "$explanation"
     else
-      zle -M "[COPILOT INTEL] NO EXPLANATION AVAILABLE."
+      _copilot_zle_explain_message "No explanation available."
     fi
     zle -R
   fi
@@ -1103,23 +1284,23 @@ zle -N _copilot_zle_explain_result_handler
 copilot_zle_explain() {
   local command="$BUFFER"
   if [[ -z "$command" ]]; then
-    zle -M "[COPILOT INTEL] EMPTY BUFFER. TYPE A COMMAND FIRST."
+    _copilot_zle_explain_message "Empty buffer. Type a command first."
     return
   fi
 
-  zle -M "[COPILOT INTEL] ANALYZING..."
+  _copilot_zle_explain_message "Analyzing..."
   zle -R
 
   # Need daemon for explain
   if ! _copilot_zle_daemon_ensure 2>/dev/null; then
-    zle -M "[COPILOT INTEL] DAEMON UNAVAILABLE."
+    _copilot_zle_explain_message "Daemon unavailable."
     return
   fi
 
   zmodload -e zsh/net/tcp || zmodload zsh/net/tcp 2>/dev/null || return
 
   ztcp 127.0.0.1 "$_COPILOT_ZLE_DAEMON_PORT" 2>/dev/null || {
-    zle -M "[COPILOT INTEL] DAEMON CONNECTION FAILED."
+    _copilot_zle_explain_message "Daemon connection failed."
     return
   }
   local tcp_fd=$REPLY
@@ -1137,12 +1318,25 @@ copilot_zle_explain() {
 # ── Key Bindings ─────────────────────────────────────────────────────
 zle -N copilot_zle_generate
 zle -N copilot_zle_explain
+zle -N copilot_zle_help
 bindkey '^g' copilot_zle_generate
 bindkey '^e' copilot_zle_explain
+bindkey '^[h' copilot_zle_help 2>/dev/null || true
+bindkey '^[H' copilot_zle_help 2>/dev/null || true
+bindkey '^Xh' copilot_zle_help 2>/dev/null || true
+bindkey '^XH' copilot_zle_help 2>/dev/null || true
 bindkey -M viins '^g' copilot_zle_generate 2>/dev/null || true
 bindkey -M vicmd '^g' copilot_zle_generate 2>/dev/null || true
 bindkey -M viins '^e' copilot_zle_explain 2>/dev/null || true
 bindkey -M vicmd '^e' copilot_zle_explain 2>/dev/null || true
+bindkey -M viins '^[h' copilot_zle_help 2>/dev/null || true
+bindkey -M vicmd '^[h' copilot_zle_help 2>/dev/null || true
+bindkey -M viins '^[H' copilot_zle_help 2>/dev/null || true
+bindkey -M vicmd '^[H' copilot_zle_help 2>/dev/null || true
+bindkey -M viins '^Xh' copilot_zle_help 2>/dev/null || true
+bindkey -M vicmd '^Xh' copilot_zle_help 2>/dev/null || true
+bindkey -M viins '^XH' copilot_zle_help 2>/dev/null || true
+bindkey -M vicmd '^XH' copilot_zle_help 2>/dev/null || true
 # Ghost-text: right-arrow or Ctrl+F to accept full suggestion
 bindkey '^[OC' _copilot_zle_ghost_accept_full 2>/dev/null || true  # Right arrow
 bindkey '^[[C' _copilot_zle_ghost_accept_full 2>/dev/null || true  # Right arrow (alt)

@@ -52,6 +52,14 @@ const DEFAULT_CONFIG = {
     maxEntries: 1000,
     fewShotCount: 3,
   },
+  branding: {
+    productName: "ghostline-zle",
+    statusPrefix: "[GHOSTLINE]",
+    errorPrefix: "[GHOSTLINE ERROR]",
+    fixPrefix: "[GHOSTLINE FIX]",
+    explainPrefix: "[GHOSTLINE HELP]",
+    thinkingLabel: "WHISPERING",
+  },
 };
 
 const normalizeAllowlist = (value) => {
@@ -109,6 +117,8 @@ const buildConfig = (input) => {
     safe.autofix && typeof safe.autofix === "object" ? safe.autofix : {};
   const flightLogInput =
     safe.flightLog && typeof safe.flightLog === "object" ? safe.flightLog : {};
+  const brandingInput =
+    safe.branding && typeof safe.branding === "object" ? safe.branding : {};
 
   const validHighlightStyles = new Set(["underline", "bold", "standout", "none"]);
 
@@ -165,6 +175,14 @@ const buildConfig = (input) => {
       enabled: pickBoolean(flightLogInput.enabled, DEFAULT_CONFIG.flightLog.enabled),
       maxEntries: clampNumber(flightLogInput.maxEntries, DEFAULT_CONFIG.flightLog.maxEntries, 100),
       fewShotCount: clampNumber(flightLogInput.fewShotCount, DEFAULT_CONFIG.flightLog.fewShotCount, 0),
+    },
+    branding: {
+      productName: pickString(brandingInput.productName, DEFAULT_CONFIG.branding.productName),
+      statusPrefix: pickString(brandingInput.statusPrefix, DEFAULT_CONFIG.branding.statusPrefix),
+      errorPrefix: pickString(brandingInput.errorPrefix, DEFAULT_CONFIG.branding.errorPrefix),
+      fixPrefix: pickString(brandingInput.fixPrefix, DEFAULT_CONFIG.branding.fixPrefix),
+      explainPrefix: pickString(brandingInput.explainPrefix, DEFAULT_CONFIG.branding.explainPrefix),
+      thinkingLabel: pickString(brandingInput.thinkingLabel, DEFAULT_CONFIG.branding.thinkingLabel),
     },
   };
 };
