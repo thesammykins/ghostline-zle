@@ -1,0 +1,11 @@
+{
+  "name": "copilot-zle",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@github/copilot-sdk": "^0.2.0"
+  }
+}

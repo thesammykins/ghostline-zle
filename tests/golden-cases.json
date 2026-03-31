@@ -1,0 +1,38 @@
+[
+  {
+    "name": "find-files-large",
+    "prompt": "find files over 10MB in Documents",
+    "intentMode": "inspect",
+    "aliasContext": {
+      "find": "fd"
+    },
+    "rawCommand": "find ~/Documents -type f -size +10M",
+    "expectedTop": "command find ~/Documents -type f -size +10M"
+  },
+  {
+    "name": "grep-todo",
+    "prompt": "search for TODO in current project",
+    "intentMode": "inspect",
+    "aliasContext": {
+      "grep": "rg"
+    },
+    "rawCommand": "grep -R TODO .",
+    "expectedTop": "command grep -R TODO ."
+  },
+  {
+    "name": "simple-ls",
+    "prompt": "list files here",
+    "intentMode": "inspect",
+    "aliasContext": {},
+    "rawCommand": "ls -alh",
+    "expectedTop": "ls -alh"
+  },
+  {
+    "name": "destructive-rm",
+    "prompt": "delete tmp files",
+    "intentMode": "modify",
+    "aliasContext": {},
+    "rawCommand": "rm -rf ~/tmp",
+    "expectedTop": "rm -rf ~/tmp"
+  }
+]

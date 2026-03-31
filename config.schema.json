@@ -1,0 +1,268 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Copilot ZLE Config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "type": "string",
+          "minLength": 1,
+          "default": "gpt-5-mini"
+        }
+      },
+      "default": {
+        "default": "gpt-5-mini"
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowlist": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "devopsEnabled": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "default": {
+        "allowlist": [],
+        "devopsEnabled": false
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxOutputBytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "default": 200000
+        },
+        "maxFileBytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "default": 1000000
+        },
+        "toolTimeoutMs": {
+          "type": "integer",
+          "minimum": 250,
+          "default": 4000
+        }
+      },
+      "default": {
+        "maxOutputBytes": 200000,
+        "maxFileBytes": 1000000,
+        "toolTimeoutMs": 4000
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "recentHistoryCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20,
+          "default": 5,
+          "description": "Number of recent shell commands to include in the AI context payload."
+        },
+        "includeGitSummary": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include current git branch and dirty state in the context payload."
+        },
+        "includeLastFailure": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include the last failed command and exit code in fix mode."
+        },
+        "includeProjectInfo": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect and include project context (npm scripts, Makefile targets, language) in AI prompts."
+        }
+      },
+      "default": {
+        "recentHistoryCount": 5,
+        "includeGitSummary": true,
+        "includeLastFailure": true,
+        "includeProjectInfo": true
+      }
+    },
+    "ui": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "highlightAiBuffer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Apply visual highlighting to AI-generated buffer text."
+        },
+        "highlightStyle": {
+          "type": "string",
+          "enum": ["underline", "bold", "standout", "none"],
+          "default": "underline",
+          "description": "ZSH region_highlight style for AI-generated text."
+        }
+      },
+      "default": {
+        "highlightAiBuffer": true,
+        "highlightStyle": "underline"
+      }
+    },
+    "daemon": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use a persistent background Node process to avoid cold-start latency."
+        },
+        "idleTimeoutSec": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 3600,
+          "default": 300,
+          "description": "Seconds of inactivity before the daemon auto-exits."
+        }
+      },
+      "default": {
+        "enabled": true,
+        "idleTimeoutSec": 300
+      }
+    },
+    "suggest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show AI-powered next-command ghost-text suggestions after each command."
+        },
+        "debounceMs": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 5000,
+          "default": 500,
+          "description": "Milliseconds to wait after command completion before requesting a suggestion."
+        },
+        "rateLimitMs": {
+          "type": "integer",
+          "minimum": 500,
+          "maximum": 10000,
+          "default": 2000,
+          "description": "Minimum interval between suggestion requests."
+        },
+        "skipCommands": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["cd", "ls", "clear", "pwd", "exit", "true", "false"],
+          "description": "Commands that should not trigger a suggestion."
+        },
+        "ghostStyle": {
+          "type": "string",
+          "default": "fg=240",
+          "description": "ZSH region_highlight style for ghost-text suggestions."
+        }
+      },
+      "default": {
+        "enabled": false,
+        "debounceMs": 500,
+        "rateLimitMs": 2000,
+        "skipCommands": ["cd", "ls", "clear", "pwd", "exit", "true", "false"],
+        "ghostStyle": "fg=240"
+      }
+    },
+    "nlDetection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-detect natural language input and route to AI instead of shell execution."
+        },
+        "minWords": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 10,
+          "default": 3,
+          "description": "Minimum word count to classify input as natural language."
+        },
+        "indicator": {
+          "type": "string",
+          "default": "[NL]",
+          "description": "Visual indicator shown when natural language is detected."
+        }
+      },
+      "default": {
+        "enabled": false,
+        "minWords": 3,
+        "indicator": "[NL]"
+      }
+    },
+    "autofix": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically suggest fixes after command failures."
+        },
+        "displayMode": {
+          "type": "string",
+          "enum": ["banner", "ghost"],
+          "default": "banner",
+          "description": "How to display fix suggestions: banner (zle -M) or ghost (inline text)."
+        }
+      },
+      "default": {
+        "enabled": false,
+        "displayMode": "banner"
+      }
+    },
+    "flightLog": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Record AI generations and execution outcomes for pattern learning."
+        },
+        "maxEntries": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 10000,
+          "default": 1000,
+          "description": "Maximum entries in the flight log before rotation."
+        },
+        "fewShotCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "default": 3,
+          "description": "Number of relevant past successes to inject as few-shot examples."
+        }
+      },
+      "default": {
+        "enabled": true,
+        "maxEntries": 1000,
+        "fewShotCount": 3
+      }
+    }
+  }
+}

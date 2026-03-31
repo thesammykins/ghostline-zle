@@ -1,0 +1,48 @@
+{
+  "model": {
+    "default": "gpt-5-mini"
+  },
+  "tools": {
+    "allowlist": [],
+    "devopsEnabled": false
+  },
+  "limits": {
+    "maxOutputBytes": 200000,
+    "maxFileBytes": 1000000,
+    "toolTimeoutMs": 4000
+  },
+  "context": {
+    "recentHistoryCount": 5,
+    "includeGitSummary": true,
+    "includeLastFailure": true
+  },
+  "ui": {
+    "highlightAiBuffer": true,
+    "highlightStyle": "underline"
+  },
+  "daemon": {
+    "enabled": true,
+    "idleTimeoutSec": 300
+  },
+  "suggest": {
+    "enabled": true,
+    "debounceMs": 500,
+    "rateLimitMs": 2000,
+    "skipCommands": ["cd", "ls", "clear", "pwd", "exit", "true", "false"],
+    "ghostStyle": "fg=240"
+  },
+  "nlDetection": {
+    "enabled": true,
+    "minWords": 3,
+    "indicator": "[NL]"
+  },
+  "autofix": {
+    "enabled": true,
+    "displayMode": "banner"
+  },
+  "flightLog": {
+    "enabled": true,
+    "maxEntries": 1000,
+    "fewShotCount": 3
+  }
+}
