@@ -1,3 +1,8 @@
+```text
+░░▒▒▓▓  ghostline-zle  ▓▓▒▒░░
+            >_
+```
+
 # ghostline-zle
 
 `ghostline-zle` is a Ghostty-first `zsh` integration that turns natural language into a single raw shell command.
