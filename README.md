@@ -89,7 +89,7 @@ The widget binds:
 - `Ctrl+E` to explain the current command
 - `Alt+H` to open the help menu
 - `Ctrl+X H` to open the help menu without Meta-key delay
-- `Alt+]` and `Alt+[` to cycle command candidates
+- `Ctrl+X ]` and `Ctrl+X [` to cycle command candidates
 - `Right Arrow` or `Ctrl+F` to accept a full ghost suggestion
 - `Ctrl+Right` to accept one ghost-text word at a time
 - `Esc+Enter` to bypass natural-language detection and run the shell command as-is

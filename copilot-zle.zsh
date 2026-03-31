@@ -173,6 +173,16 @@ _copilot_zle_explain_message() {
   _copilot_zle_show_message "$_COPILOT_ZLE_CFG_BRAND_EXPLAIN_PREFIX" "$1"
 }
 
+_copilot_zle_capture_tty_state() {
+  stty -g 2>/dev/null || true
+}
+
+_copilot_zle_restore_tty_state() {
+  local tty_state="$1"
+  [[ -n "$tty_state" ]] || return 0
+  stty "$tty_state" 2>/dev/null || true
+}
+
 _copilot_zle_reload_cached_config() {
   _COPILOT_ZLE_CFG_HIGHLIGHT_ENABLED="$(_copilot_zle_read_config '.ui.highlightAiBuffer' 'true')"
   _COPILOT_ZLE_CFG_HIGHLIGHT_STYLE="$(_copilot_zle_read_config '.ui.highlightStyle' 'underline')"
@@ -210,11 +220,14 @@ _copilot_zle_open_with_editor() {
   local -a editor_cmd
   editor_cmd=( ${(z)${VISUAL:-${EDITOR:-vi}}} )
   (( ${#editor_cmd[@]} > 0 )) || editor_cmd=(vi)
+  local tty_state
+  tty_state="$(_copilot_zle_capture_tty_state)"
 
   zle -I
   print -r -- ""
   print -r -- "opening ${label} with ${editor_cmd[1]}..."
   command "${editor_cmd[@]}" "$target"
+  _copilot_zle_restore_tty_state "$tty_state"
   zle reset-prompt
   zle -R
 }
@@ -234,11 +247,14 @@ _copilot_zle_open_with_pager() {
   else
     pager_cmd=(cat)
   fi
+  local tty_state
+  tty_state="$(_copilot_zle_capture_tty_state)"
 
   zle -I
   print -r -- ""
   print -r -- "opening ${label}..."
   command "${pager_cmd[@]}" "$target"
+  _copilot_zle_restore_tty_state "$tty_state"
   zle reset-prompt
   zle -R
 }
@@ -294,6 +310,8 @@ copilot_zle_help() {
   config_path="${_COPILOT_ZLE_CONFIG_PATH:-${COPILOT_ZLE_CONFIG_FILE:-$helpers_dir/config.json}}"
   readme_path="$helpers_dir/README.md"
   policy_path="$helpers_dir/policy.txt"
+  local tty_state
+  tty_state="$(_copilot_zle_capture_tty_state)"
 
   zle -I
   print -r -- ""
@@ -305,7 +323,7 @@ copilot_zle_help() {
   print -r -- "  Ctrl+E        explain current buffer command"
   print -r -- "  Alt+H         open this help menu"
   print -r -- "  Ctrl+X H      open this help menu without Meta-key delay"
-  print -r -- "  Alt+] / Alt+[ cycle AI candidates"
+  print -r -- "  Ctrl+X ]/[    cycle AI candidates"
   print -r -- "  Right / Ctrl+F accept full ghost suggestion"
   print -r -- "  Ctrl+Right    accept one ghost word"
   print -r -- "  Esc+Enter     bypass NL detection"
@@ -324,8 +342,11 @@ copilot_zle_help() {
   print -n -- "choose action: "
 
   local choice=""
-  read -rk 1 choice
+  if ! read -rk 1 -t 30 choice 2>/dev/null; then
+    choice="q"
+  fi
   print -r -- ""
+  _copilot_zle_restore_tty_state "$tty_state"
 
   case "$choice" in
     [sS]) _copilot_zle_toggle_config_boolean "suggest.enabled" "suggestions" ;;
@@ -696,8 +717,8 @@ _copilot_zle_cycle_prev() {
 
 zle -N _copilot_zle_cycle_next
 zle -N _copilot_zle_cycle_prev
-bindkey '^[]' _copilot_zle_cycle_next 2>/dev/null || true    # Alt+]
-bindkey '^[[' _copilot_zle_cycle_prev 2>/dev/null || true    # Alt+[
+bindkey '^X]' _copilot_zle_cycle_next 2>/dev/null || true    # Ctrl+X ]
+bindkey '^X[' _copilot_zle_cycle_prev 2>/dev/null || true    # Ctrl+X [
 
 # ── Proactive Autofix ────────────────────────────────────────────────
 _copilot_zle_autofix_precmd() {
