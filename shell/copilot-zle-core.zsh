@@ -64,6 +64,16 @@ typeset -ga _COPILOT_ZLE_CANDIDATES=()
 typeset -gi _COPILOT_ZLE_CANDIDATE_IDX=0
 # Flight log + queued prompt message tracking
 typeset -g  _COPILOT_ZLE_TRACKING_EXECUTION=""
+# Ghost-text diff tracking (Bug2): only clear on actual buffer change
+typeset -g  _COPILOT_ZLE_LAST_BUFFER=""
+# Autofix cache binding: which command the cached fix was generated for (Bug4)
+typeset -g  _COPILOT_ZLE_AUTOFIX_FOR_COMMAND=""
+# Autofix in-flight guard (Imp6): prevent concurrent autofix requests
+typeset -gi _COPILOT_ZLE_AUTOFIX_ACTIVE=0
+# Explain-specific daemon flag (Imp7): tracks whether the active explain
+# request is using daemon (ztcp) or subprocess (pipe fd), so the result
+# handler can close the fd correctly without touching the shared flag.
+typeset -gi _COPILOT_ZLE_EXPLAIN_USING_DAEMON=0
 
 # ── Hooks: track last command, exit code, and stderr (SAM-40) ────────
 autoload -Uz add-zsh-hook
@@ -426,7 +436,7 @@ _copilot_zle_mark_executed() {
     # Fallback: call Node directly (lightweight, fire-and-forget)
     local helpers_dir
     helpers_dir="$(_copilot_zle_helpers_dir)"
-    NODE_NO_WARNINGS=1 node -e "
+    NODE_NO_WARNINGS=1 node --input-type=module -e "
       import { markExecuted } from '${helpers_dir}/lib/flight-log.mjs';
       markExecuted(process.argv[1], parseInt(process.argv[2], 10));
     " "$command" "$exit_code" 2>/dev/null
@@ -564,16 +574,20 @@ _copilot_zle_ghost_accept_word() {
   fi
 }
 
-# Clear ghost text on any buffer change
+# Clear ghost text only when the buffer actually changes (Bug2 fix).
+# line-pre-redraw fires on every ZLE event (arrow keys, completion, etc.),
+# so we diff against _COPILOT_ZLE_LAST_BUFFER to avoid clearing on non-edit events.
 _copilot_zle_ghost_line_changed() {
-  if [[ -n "$_COPILOT_ZLE_GHOST_TEXT" && -n "$BUFFER" ]]; then
-    # If user started typing, clear ghost
-    _copilot_zle_ghost_clear
-  fi
-  # Also handle AI highlight clearing
-  if [[ -n "$_COPILOT_ZLE_GENERATED_BUFFER" && "$BUFFER" != "$_COPILOT_ZLE_GENERATED_BUFFER" ]]; then
-    region_highlight=()
-    _COPILOT_ZLE_GENERATED_BUFFER=""
+  if [[ "$BUFFER" != "$_COPILOT_ZLE_LAST_BUFFER" ]]; then
+    # Buffer changed — clear ghost text and AI highlight
+    if [[ -n "$_COPILOT_ZLE_GHOST_TEXT" ]]; then
+      _copilot_zle_ghost_clear
+    fi
+    if [[ -n "$_COPILOT_ZLE_GENERATED_BUFFER" && "$BUFFER" != "$_COPILOT_ZLE_GENERATED_BUFFER" ]]; then
+      region_highlight=()
+      _COPILOT_ZLE_GENERATED_BUFFER=""
+    fi
+    _COPILOT_ZLE_LAST_BUFFER="$BUFFER"
   fi
 }
 
@@ -596,11 +610,10 @@ _copilot_zle_suggest_result_handler() {
     fi
   fi
 
-  if (( _COPILOT_ZLE_USING_DAEMON )); then
-    ztcp -c "$fd" 2>/dev/null
-  else
-    builtin exec {fd}<&- 2>/dev/null
-  fi
+  # Suggest always requires daemon — always close via ztcp (Bug3 fix: avoid
+  # branching on the shared _COPILOT_ZLE_USING_DAEMON flag which can be
+  # clobbered by a concurrent generate request).
+  ztcp -c "$fd" 2>/dev/null
   zle -F "$fd" 2>/dev/null
   _COPILOT_ZLE_GHOST_FD=""
 }
@@ -608,9 +621,14 @@ _copilot_zle_suggest_result_handler() {
 _copilot_zle_request_suggest() {
   [[ "$_COPILOT_ZLE_CFG_SUGGEST_ENABLED" == "true" ]] || return
 
-  # Rate limit
+  # Rate limit — use $EPOCHSECONDS (zsh built-in, no fork) if available,
+  # otherwise fall back to the date subprocess (Bug5 fix).
   local now_ms
-  now_ms=$(( $(date +%s) * 1000 ))
+  if zmodload zsh/datetime 2>/dev/null; then
+    now_ms=$(( EPOCHSECONDS * 1000 ))
+  else
+    now_ms=$(( $(date +%s) * 1000 ))
+  fi
   local elapsed=$(( now_ms - _COPILOT_ZLE_LAST_SUGGEST_TS ))
   if (( elapsed < _COPILOT_ZLE_CFG_SUGGEST_RATE_LIMIT_MS )); then
     return
@@ -740,16 +758,29 @@ _copilot_zle_autofix_precmd() {
   # Only trigger on non-zero exit
   [[ "$_COPILOT_ZLE_LAST_EXIT_CODE" != "0" ]] || return
   [[ -n "$_COPILOT_ZLE_LAST_EXECUTED_COMMAND" ]] || return
+  # In-flight guard: skip if a prior autofix request is still pending (Imp6 fix).
+  # Prevents concurrent requests that race to write _COPILOT_ZLE_LAST_AI_COMMAND.
+  (( _COPILOT_ZLE_AUTOFIX_ACTIVE )) && return
+  _COPILOT_ZLE_AUTOFIX_ACTIVE=1
 
   _copilot_zle_debug_log "autofix: command='$_COPILOT_ZLE_LAST_EXECUTED_COMMAND' exit=$_COPILOT_ZLE_LAST_EXIT_CODE"
 
   # Need daemon for autofix
-  _copilot_zle_daemon_ensure 2>/dev/null || return
-  zmodload -e zsh/net/tcp || zmodload zsh/net/tcp 2>/dev/null || return
+  if ! _copilot_zle_daemon_ensure 2>/dev/null; then
+    _COPILOT_ZLE_AUTOFIX_ACTIVE=0
+    return
+  fi
+  if ! { zmodload -e zsh/net/tcp || zmodload zsh/net/tcp 2>/dev/null; }; then
+    _COPILOT_ZLE_AUTOFIX_ACTIVE=0
+    return
+  fi
 
   _copilot_zle_fix_message "$(_copilot_zle_failure_notice_message autofix "$_COPILOT_ZLE_LAST_EXIT_CODE")"
 
-  ztcp 127.0.0.1 "$_COPILOT_ZLE_DAEMON_PORT" 2>/dev/null || return
+  if ! ztcp 127.0.0.1 "$_COPILOT_ZLE_DAEMON_PORT" 2>/dev/null; then
+    _COPILOT_ZLE_AUTOFIX_ACTIVE=0
+    return
+  fi
   local tcp_fd=$REPLY
 
   local escaped_cmd
@@ -782,11 +813,14 @@ _copilot_zle_autofix_result_handler() {
         _copilot_zle_fix_message "$_COPILOT_ZLE_LAST_EXECUTED_COMMAND -> $cmd  (Ctrl+G to apply)"
         _COPILOT_ZLE_LAST_AI_COMMAND="$cmd"
         _COPILOT_ZLE_LAST_AI_PROMPT="fix the last command that failed"
+        # Bind this cached fix to the command it was generated for (Bug4 fix)
+        _COPILOT_ZLE_AUTOFIX_FOR_COMMAND="$_COPILOT_ZLE_LAST_EXECUTED_COMMAND"
       fi
       zle -R
     fi
   fi
 
+  _COPILOT_ZLE_AUTOFIX_ACTIVE=0
   ztcp -c "$fd" 2>/dev/null
   zle -F "$fd" 2>/dev/null
 }
@@ -1211,8 +1245,13 @@ copilot_zle_generate() {
   local effective_prompt=""
   case "$mode" in
     fix)
-      # If autofix already found a fix, apply it directly
-      if [[ -n "$_COPILOT_ZLE_LAST_AI_COMMAND" && "$_COPILOT_ZLE_LAST_AI_PROMPT" == "fix the last command that failed" ]]; then
+      # If autofix already found a fix for THIS specific failed command, apply it directly.
+      # Also verify _COPILOT_ZLE_AUTOFIX_FOR_COMMAND matches the current failure to avoid
+      # applying a stale cache from a previous command's failure (Bug4 fix).
+      if [[ -n "$_COPILOT_ZLE_LAST_AI_COMMAND" && \
+            "$_COPILOT_ZLE_LAST_AI_PROMPT" == "fix the last command that failed" && \
+            -n "$_COPILOT_ZLE_AUTOFIX_FOR_COMMAND" && \
+            "$_COPILOT_ZLE_AUTOFIX_FOR_COMMAND" == "$_COPILOT_ZLE_LAST_EXECUTED_COMMAND" ]]; then
         BUFFER="$_COPILOT_ZLE_LAST_AI_COMMAND"
         CURSOR=${#BUFFER}
         _COPILOT_ZLE_GENERATED_BUFFER="$BUFFER"
@@ -1309,11 +1348,15 @@ _copilot_zle_explain_result_handler() {
     zle -R
   fi
 
-  if (( _COPILOT_ZLE_USING_DAEMON )); then
+  # Close the fd using the correct method for the transport in use (Imp7).
+  # Bug3 fix: use _COPILOT_ZLE_EXPLAIN_USING_DAEMON (explain-specific flag)
+  # rather than the shared _COPILOT_ZLE_USING_DAEMON which can be clobbered.
+  if (( _COPILOT_ZLE_EXPLAIN_USING_DAEMON )); then
     ztcp -c "$fd" 2>/dev/null
   else
     builtin exec {fd}<&- 2>/dev/null
   fi
+  _COPILOT_ZLE_EXPLAIN_USING_DAEMON=0
   zle -F "$fd" 2>/dev/null
 }
 zle -N _copilot_zle_explain_result_handler
@@ -1328,28 +1371,36 @@ copilot_zle_explain() {
   _copilot_zle_explain_message "Analyzing..."
   zle -R
 
-  # Need daemon for explain
-  if ! _copilot_zle_daemon_ensure 2>/dev/null; then
-    _copilot_zle_explain_message "Daemon unavailable."
+  local escaped_cmd
+  escaped_cmd="$(printf '%s' "$command" | jq -Rs '.' 2>/dev/null || echo '""')"
+  local request="{\"id\":${RANDOM},\"type\":\"explain\",\"format\":\"zle\",\"payload\":{\"command\":${escaped_cmd},\"cwd\":\"${PWD}\",\"home\":\"${HOME}\"}}"
+
+  # Try daemon first
+  if _copilot_zle_daemon_ensure 2>/dev/null && \
+     { zmodload -e zsh/net/tcp || zmodload zsh/net/tcp 2>/dev/null; } && \
+     ztcp 127.0.0.1 "$_COPILOT_ZLE_DAEMON_PORT" 2>/dev/null; then
+    local tcp_fd=$REPLY
+    print -r -u "$tcp_fd" -- "$request"
+    _COPILOT_ZLE_EXPLAIN_USING_DAEMON=1
+    zle -F "$tcp_fd" _copilot_zle_explain_result_handler
     return
   fi
 
-  zmodload -e zsh/net/tcp || zmodload zsh/net/tcp 2>/dev/null || return
+  # Subprocess fallback (Imp7): pipe request to daemon in stdio mode so explain
+  # works even when the TCP daemon cannot start.
+  local helpers_dir
+  helpers_dir="$(_copilot_zle_helpers_dir)"
+  local stderr_target="/dev/null"
+  if [[ -n "${COPILOT_ZLE_DEBUG:-}" ]]; then
+    stderr_target="$COPILOT_ZLE_DEBUG_LOG"
+  fi
 
-  ztcp 127.0.0.1 "$_COPILOT_ZLE_DAEMON_PORT" 2>/dev/null || {
-    _copilot_zle_explain_message "Daemon connection failed."
-    return
-  }
-  local tcp_fd=$REPLY
-
-  local escaped_cmd
-  escaped_cmd="$(printf '%s' "$command" | jq -Rs '.' 2>/dev/null || echo '""')"
-
-  local request="{\"id\":${RANDOM},\"type\":\"explain\",\"format\":\"zle\",\"payload\":{\"command\":${escaped_cmd},\"cwd\":\"${PWD}\",\"home\":\"${HOME}\"}}"
-  print -r -u "$tcp_fd" -- "$request"
-
-  _COPILOT_ZLE_USING_DAEMON=1
-  zle -F "$tcp_fd" _copilot_zle_explain_result_handler
+  _COPILOT_ZLE_EXPLAIN_USING_DAEMON=0
+  builtin exec {_COPILOT_ZLE_RESULT_FD}< <(
+    printf '%s\n' "$request" | NODE_NO_WARNINGS=1 node \
+      "$helpers_dir/lib/copilot-daemon.mjs" 2>>"$stderr_target"
+  )
+  zle -F "$_COPILOT_ZLE_RESULT_FD" _copilot_zle_explain_result_handler
 }
 
 # ── Key Bindings ─────────────────────────────────────────────────────
