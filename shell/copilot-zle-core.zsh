@@ -5,7 +5,7 @@
 
 # ── Configuration ────────────────────────────────────────────────────
 export COPILOT_ZLE_TIMEOUT_MS="${COPILOT_ZLE_TIMEOUT_MS:-30000}"
-export COPILOT_ZLE_MODEL="${COPILOT_ZLE_MODEL:-gpt-5-mini}"
+export COPILOT_ZLE_MODEL="${COPILOT_ZLE_MODEL:-}"
 export COPILOT_ZLE_PLUGIN_PATH="${COPILOT_ZLE_PLUGIN_PATH:-${(%):-%x}}"
 export COPILOT_ZLE_DEBUG_LOG="${COPILOT_ZLE_DEBUG_LOG:-/tmp/copilot-zle-debug.log}"
 
@@ -25,7 +25,9 @@ typeset -g  _COPILOT_ZLE_SPINNER_FD=""
 typeset -g  _COPILOT_ZLE_PENDING_CMD=""
 typeset -g  _COPILOT_ZLE_PENDING_EC=""
 typeset -g  _COPILOT_ZLE_PENDING_ERR=""
+typeset -g  _COPILOT_ZLE_PENDING_RAW=""
 # Cached UI config (read once at load, avoids forking jq inside zle -F handlers)
+typeset -g  _COPILOT_ZLE_CFG_MODEL_DEFAULT=""
 typeset -g  _COPILOT_ZLE_CFG_HIGHLIGHT_ENABLED=""
 typeset -g  _COPILOT_ZLE_CFG_HIGHLIGHT_STYLE=""
 typeset -gi _COPILOT_ZLE_SPINNER_IDX=0
@@ -223,6 +225,7 @@ _copilot_zle_restore_tty_state() {
 }
 
 _copilot_zle_reload_cached_config() {
+  _COPILOT_ZLE_CFG_MODEL_DEFAULT="$(_copilot_zle_read_config '.model.default' 'gpt-5-mini')"
   _COPILOT_ZLE_CFG_HIGHLIGHT_ENABLED="$(_copilot_zle_read_config '.ui.highlightAiBuffer' 'true')"
   _COPILOT_ZLE_CFG_HIGHLIGHT_STYLE="$(_copilot_zle_read_config '.ui.highlightStyle' 'underline')"
   _COPILOT_ZLE_CFG_DAEMON_ENABLED="$(_copilot_zle_read_config '.daemon.enabled' 'true')"
@@ -247,6 +250,36 @@ _copilot_zle_reload_cached_config() {
     "${_COPILOT_ZLE_CFG_BRAND_THINKING_LABEL}..."
     "${_COPILOT_ZLE_CFG_BRAND_THINKING_LABEL}...."
   )
+}
+
+_copilot_zle_effective_model() {
+  if [[ -n "${COPILOT_ZLE_MODEL:-}" ]]; then
+    echo "$COPILOT_ZLE_MODEL"
+    return
+  fi
+  if [[ -n "$_COPILOT_ZLE_CFG_MODEL_DEFAULT" ]]; then
+    echo "$_COPILOT_ZLE_CFG_MODEL_DEFAULT"
+    return
+  fi
+  echo "gpt-5-mini"
+}
+
+_copilot_zle_json_get() {
+  local raw="$1" filter="$2"
+  [[ -n "$raw" ]] || return 0
+  printf '%s' "$raw" | jq -r "$filter" 2>/dev/null
+}
+
+_copilot_zle_build_request() {
+  local type="$1" format="$2" payload_json="$3"
+  [[ -n "$payload_json" ]] || return 1
+
+  jq -n -c \
+    --arg type "$type" \
+    --arg format "$format" \
+    --argjson id "${RANDOM:-0}" \
+    --argjson payload "$payload_json" \
+    '{ id: $id, type: $type, payload: $payload } + (if $format == "" then {} else { format: $format } end)'
 }
 
 # Cache UI config at load time (safe to fork jq here, outside ZLE context)
@@ -409,15 +442,13 @@ _copilot_zle_mark_executed() {
 
   # Prefer daemon path (fire-and-forget)
   if _copilot_zle_daemon_is_running 2>/dev/null; then
-    zmodload -e zsh/net/tcp || zmodload zsh/net/tcp 2>/dev/null || return
-    if (( _COPILOT_ZLE_DAEMON_PORT == 0 )); then
-      _copilot_zle_daemon_read_state
-    fi
-    local escaped_cmd
-    escaped_cmd="$(printf '%s' "$command" | jq -Rs '.' 2>/dev/null || echo '""')"
-    local request="{\"type\":\"mark_executed\",\"payload\":{\"command\":${escaped_cmd},\"exitCode\":${exit_code:-0}}}"
+    _copilot_zle_daemon_read_state
+    local payload request
+    payload="$(jq -n -c --arg command "$command" --argjson exitCode "${exit_code:-0}" '{ command: $command, exitCode: $exitCode }' 2>/dev/null)"
+    request="$(_copilot_zle_build_request "mark_executed" "" "$payload" 2>/dev/null)"
+    [[ -n "$request" ]] || return
     {
-      ztcp 127.0.0.1 "$_COPILOT_ZLE_DAEMON_PORT" 2>/dev/null && {
+      _copilot_zle_daemon_connect 2>/dev/null && {
         print -r -u "$REPLY" -- "$request"
         ztcp -c "$REPLY" 2>/dev/null
       }
@@ -497,15 +528,30 @@ _copilot_zle_daemon_ensure() {
   [[ "$_COPILOT_ZLE_CFG_DAEMON_ENABLED" == "true" ]] || return 1
 
   if _copilot_zle_daemon_is_running; then
-    if (( _COPILOT_ZLE_DAEMON_PORT == 0 )); then
-      _copilot_zle_daemon_read_state
-      _copilot_zle_debug_log "daemon reconnected: pid=$_COPILOT_ZLE_DAEMON_PID port=$_COPILOT_ZLE_DAEMON_PORT"
-    fi
+    _copilot_zle_daemon_read_state
+    _copilot_zle_debug_log "daemon reconnected: pid=$_COPILOT_ZLE_DAEMON_PID port=$_COPILOT_ZLE_DAEMON_PORT"
     return 0
   fi
 
   _copilot_zle_debug_log "daemon not running, starting..."
   _copilot_zle_daemon_start
+}
+
+_copilot_zle_daemon_connect() {
+  zmodload -e zsh/net/tcp || zmodload zsh/net/tcp 2>/dev/null || return 1
+
+  local attempt=0
+  while (( attempt < 2 )); do
+    [[ "$_COPILOT_ZLE_CFG_DAEMON_ENABLED" == "true" ]] || return 1
+    if (( _COPILOT_ZLE_DAEMON_PORT == 0 )); then
+      _copilot_zle_daemon_read_state
+    fi
+    ztcp 127.0.0.1 "$_COPILOT_ZLE_DAEMON_PORT" 2>/dev/null && return 0
+    _copilot_zle_daemon_read_state
+    (( attempt++ ))
+  done
+
+  return 1
 }
 
 # ── Ghost-Text Suggestions ───────────────────────────────────────────
@@ -580,18 +626,19 @@ _copilot_zle_ghost_line_changed() {
 # Suggest result handler (async, lightweight)
 _copilot_zle_suggest_result_handler() {
   local fd=$1
-  local line=""
+  local error_code="" error_json="" command_json="" rest="" command=""
 
   if [[ -z "$2" || "$2" == "hup" ]]; then
-    read -r -u $fd line 2>/dev/null
-    read -r -u $fd line 2>/dev/null  # skip error line
-    local cmd=""
-    IFS='' read -rd '' -u $fd cmd 2>/dev/null
-    _copilot_zle_debug_log "suggest result: '$cmd'"
+    read -r -u $fd error_code 2>/dev/null
+    read -r -u $fd error_json 2>/dev/null
+    read -r -u $fd command_json 2>/dev/null
+    IFS='' read -rd '' -u $fd rest 2>/dev/null
+    command="$(_copilot_zle_json_get "$command_json" '.' 2>/dev/null)"
+    _copilot_zle_debug_log "suggest result: '$command' ec='$error_code'"
 
     # Only show if buffer is still empty (user hasn't started typing)
-    if [[ -z "$BUFFER" && -n "$cmd" ]]; then
-      _copilot_zle_ghost_render "$cmd"
+    if [[ -z "$BUFFER" && -n "$command" ]]; then
+      _copilot_zle_ghost_render "$command"
       zle -R
     fi
   fi
@@ -626,8 +673,6 @@ _copilot_zle_request_suggest() {
   # Need daemon for suggestions
   _copilot_zle_daemon_ensure 2>/dev/null || return
 
-  zmodload -e zsh/net/tcp || zmodload zsh/net/tcp 2>/dev/null || return
-
   _copilot_zle_debug_log "suggest: requesting for '$_COPILOT_ZLE_LAST_EXECUTED_COMMAND' (exit $_COPILOT_ZLE_LAST_EXIT_CODE)"
   if [[ "$_COPILOT_ZLE_LAST_EXIT_CODE" != "0" ]]; then
     _copilot_zle_fix_message "$(_copilot_zle_failure_notice_message suggest "$_COPILOT_ZLE_LAST_EXIT_CODE")"
@@ -640,7 +685,7 @@ _copilot_zle_request_suggest() {
     _COPILOT_ZLE_GHOST_FD=""
   fi
 
-  ztcp 127.0.0.1 "$_COPILOT_ZLE_DAEMON_PORT" 2>/dev/null || return
+  _copilot_zle_daemon_connect 2>/dev/null || return
   local tcp_fd=$REPLY
 
   local history_snippet=""
@@ -648,13 +693,27 @@ _copilot_zle_request_suggest() {
     history_snippet="$(fc -l -5 2>/dev/null | sed 's/^[[:space:]]*[0-9]*[[:space:]]*//' || echo "")"
   fi
 
-  # JSON-escape the history
-  local escaped_history
-  escaped_history="$(printf '%s' "$history_snippet" | jq -Rs '.' 2>/dev/null || echo '""')"
-  local escaped_cmd
-  escaped_cmd="$(printf '%s' "$_COPILOT_ZLE_LAST_EXECUTED_COMMAND" | jq -Rs '.' 2>/dev/null || echo '""')"
-
-  local request="{\"id\":${RANDOM},\"type\":\"suggest\",\"format\":\"zle\",\"payload\":{\"lastCommand\":${escaped_cmd},\"exitCode\":${_COPILOT_ZLE_LAST_EXIT_CODE:-0},\"cwd\":\"${PWD}\",\"home\":\"${HOME}\",\"recentHistory\":${escaped_history}}}"
+  local payload request
+  payload="$(jq -n -c \
+    --arg lastCommand "$_COPILOT_ZLE_LAST_EXECUTED_COMMAND" \
+    --argjson exitCode "${_COPILOT_ZLE_LAST_EXIT_CODE:-0}" \
+    --arg cwd "$PWD" \
+    --arg home "$HOME" \
+    --arg recentHistory "$history_snippet" \
+    --arg model "$(_copilot_zle_effective_model)" \
+    '{
+      lastCommand: $lastCommand,
+      exitCode: $exitCode,
+      cwd: $cwd,
+      home: $home,
+      recentHistory: $recentHistory,
+      model: $model
+    }' 2>/dev/null)"
+  request="$(_copilot_zle_build_request "suggest" "zle" "$payload" 2>/dev/null)"
+  [[ -n "$request" ]] || {
+    ztcp -c "$tcp_fd" 2>/dev/null
+    return
+  }
 
   print -r -u "$tcp_fd" -- "$request"
 
@@ -745,20 +804,19 @@ _copilot_zle_autofix_precmd() {
 
   # Need daemon for autofix
   _copilot_zle_daemon_ensure 2>/dev/null || return
-  zmodload -e zsh/net/tcp || zmodload zsh/net/tcp 2>/dev/null || return
 
   _copilot_zle_fix_message "$(_copilot_zle_failure_notice_message autofix "$_COPILOT_ZLE_LAST_EXIT_CODE")"
 
-  ztcp 127.0.0.1 "$_COPILOT_ZLE_DAEMON_PORT" 2>/dev/null || return
+  _copilot_zle_daemon_connect 2>/dev/null || return
   local tcp_fd=$REPLY
 
-  local escaped_cmd
-  escaped_cmd="$(printf '%s' "$_COPILOT_ZLE_LAST_EXECUTED_COMMAND" | jq -Rs '.' 2>/dev/null || echo '""')"
-  local escaped_stderr
-  escaped_stderr="$(printf '%s' "$_COPILOT_ZLE_LAST_STDERR" | jq -Rs '.' 2>/dev/null || echo '""')"
-
-  local payload="{\"prompt\":\"fix the last command that failed\",\"mode\":\"fix\",\"recentHistory\":\"\",\"gitSummary\":\"\",\"lastFailure\":${escaped_cmd},\"lastStderr\":${escaped_stderr},\"priorAi\":{\"prompt\":\"\",\"command\":\"\"}}"
-  local request="{\"id\":${RANDOM},\"type\":\"generate\",\"format\":\"zle\",\"payload\":${payload}}"
+  local payload request
+  payload="$(_copilot_zle_build_payload "fix the last command that failed" "fix")"
+  request="$(_copilot_zle_build_request "generate" "zle" "$payload" 2>/dev/null)"
+  [[ -n "$request" ]] || {
+    ztcp -c "$tcp_fd" 2>/dev/null
+    return
+  }
 
   print -r -u "$tcp_fd" -- "$request"
 
@@ -770,10 +828,13 @@ _copilot_zle_autofix_result_handler() {
   local fd=$1
 
   if [[ -z "$2" || "$2" == "hup" ]]; then
-    local ec="" err="" cmd=""
+    local ec="" err_json="" cmd_json="" rest="" err="" cmd=""
     read -r -u $fd ec 2>/dev/null
-    read -r -u $fd err 2>/dev/null
-    IFS='' read -rd '' -u $fd cmd 2>/dev/null
+    read -r -u $fd err_json 2>/dev/null
+    read -r -u $fd cmd_json 2>/dev/null
+    IFS='' read -rd '' -u $fd rest 2>/dev/null
+    err="$(_copilot_zle_json_get "$err_json" '.' 2>/dev/null)"
+    cmd="$(_copilot_zle_json_get "$cmd_json" '.' 2>/dev/null)"
 
     if [[ -n "$cmd" ]]; then
       if [[ "$_COPILOT_ZLE_CFG_AUTOFIX_MODE" == "ghost" ]]; then
@@ -875,11 +936,12 @@ _copilot_zle_build_payload() {
 
   # Gather key aliases (ls, cat, grep, find, du — the ones the model should prefer)
   local alias_context=""
-  alias_context="$(alias ls cat grep find du 2>/dev/null | head -20 || echo "")"
+  alias_context="$(alias ls cat grep find du 2>/dev/null || echo "")"
 
   jq -n -c \
     --arg prompt "$prompt" \
     --arg mode "$mode" \
+    --arg model "$(_copilot_zle_effective_model)" \
     --arg recent_history "$recent_history" \
     --arg git_summary "$git_summary" \
     --arg last_failure "$last_failure" \
@@ -894,6 +956,7 @@ _copilot_zle_build_payload() {
     --arg in_git_repo "$in_git_repo" \
     --arg alias_context "$alias_context" \
     '{
+      model: $model,
       prompt: $prompt,
       mode: $mode,
       recentHistory: $recent_history,
@@ -965,6 +1028,7 @@ _copilot_zle_spinner_handler() {
 _copilot_zle_result_handler() {
   emulate -L zsh
   local fd=$1
+  local error_json="" command_json="" candidate_blob=""
 
   # Stop spinner
   _COPILOT_ZLE_ASYNC_ACTIVE=0
@@ -975,11 +1039,15 @@ _copilot_zle_result_handler() {
   fi
 
   if [[ -z "$2" || "$2" == "hup" ]]; then
-    # Read pre-extracted fields directly from the pipe (builtins only).
-    # Format: line 1 = error_code, line 2 = error, rest = command.
+    # Format: line 1 = error_code, line 2 = error, line 3 = command,
+    # line 4 = candidate blob (US-delimited).
     read -r -u $fd _COPILOT_ZLE_PENDING_EC 2>/dev/null
-    read -r -u $fd _COPILOT_ZLE_PENDING_ERR 2>/dev/null
-    IFS='' read -rd '' -u $fd _COPILOT_ZLE_PENDING_CMD 2>/dev/null
+    read -r -u $fd error_json 2>/dev/null
+    read -r -u $fd command_json 2>/dev/null
+    IFS='' read -rd '' -u $fd candidate_blob 2>/dev/null
+    _COPILOT_ZLE_PENDING_ERR="$(_copilot_zle_json_get "$error_json" '.' 2>/dev/null)"
+    _COPILOT_ZLE_PENDING_CMD="$(_copilot_zle_json_get "$command_json" '.' 2>/dev/null)"
+    _COPILOT_ZLE_PENDING_RAW="$(_copilot_zle_json_get "$candidate_blob" '.' 2>/dev/null)"
 
     _copilot_zle_debug_log "pipe read: cmd='${_COPILOT_ZLE_PENDING_CMD}' ec='${_COPILOT_ZLE_PENDING_EC}' err='${_COPILOT_ZLE_PENDING_ERR}'"
 
@@ -1004,11 +1072,13 @@ _copilot_zle_apply_result() {
   local command="$_COPILOT_ZLE_PENDING_CMD"
   local error="$_COPILOT_ZLE_PENDING_ERR"
   local error_code="$_COPILOT_ZLE_PENDING_EC"
+  local candidate_blob="$_COPILOT_ZLE_PENDING_RAW"
   local mode="$_COPILOT_ZLE_ASYNC_MODE"
 
   _COPILOT_ZLE_PENDING_CMD=""
   _COPILOT_ZLE_PENDING_ERR=""
   _COPILOT_ZLE_PENDING_EC=""
+  _COPILOT_ZLE_PENDING_RAW=""
 
   _copilot_zle_debug_log "apply_result widget: cmd_len=${#command} ec='$error_code' mode=$mode"
 
@@ -1021,7 +1091,7 @@ _copilot_zle_apply_result() {
         _copilot_zle_error_message "GitHub Copilot auth required."
         ;;
       copilot_model_rejected)
-        _copilot_zle_error_message "Model rejected: $COPILOT_ZLE_MODEL"
+        _copilot_zle_error_message "Model rejected: $(_copilot_zle_effective_model)"
         ;;
       copilot_timeout)
         _copilot_zle_error_message "${_COPILOT_ZLE_CFG_BRAND_PRODUCT_NAME} request timed out."
@@ -1050,16 +1120,20 @@ _copilot_zle_apply_result() {
 
   # Dry validation: check if the primary binary exists
   local _copilot_dry_warn=""
-  local _copilot_first_token="${command%% *}"
-  # Strip leading env assignments (VAR=val cmd)
-  if [[ "$_copilot_first_token" == *=* ]]; then
-    local _copilot_rest="${command#*= }"
-    _copilot_first_token="${_copilot_rest%% *}"
-  fi
-  # Strip "command " prefix
+  local -a _copilot_words
+  _copilot_words=( ${(z)command} )
+  local _copilot_idx=1
+  while (( _copilot_idx <= ${#_copilot_words} )); do
+    if [[ "${_copilot_words[_copilot_idx]}" == [A-Za-z_][A-Za-z0-9_]*=* ]]; then
+      (( _copilot_idx++ ))
+      continue
+    fi
+    break
+  done
+  local _copilot_first_token="${_copilot_words[_copilot_idx]:-}"
   if [[ "$_copilot_first_token" == "command" ]]; then
-    local _copilot_rest="${command#command }"
-    _copilot_first_token="${_copilot_rest%% *}"
+    (( _copilot_idx++ ))
+    _copilot_first_token="${_copilot_words[_copilot_idx]:-}"
   fi
   if [[ -n "$_copilot_first_token" ]] && \
      ! (( $+commands[$_copilot_first_token] )) && \
@@ -1073,8 +1147,17 @@ _copilot_zle_apply_result() {
   BUFFER="$command"
   CURSOR=${#BUFFER}
 
-  # Store candidates for cycling (daemon may return extras via _COPILOT_ZLE_PENDING_CANDIDATES)
-  _COPILOT_ZLE_CANDIDATES=("$command")
+  local -a _copilot_candidates=()
+  local -A _copilot_seen=()
+  local _copilot_candidate
+  for _copilot_candidate in "${(@s:$'\x1f':)candidate_blob}" "$command"; do
+    [[ -n "$_copilot_candidate" ]] || continue
+    [[ -n "${_copilot_seen[$_copilot_candidate]:-}" ]] && continue
+    _copilot_seen[$_copilot_candidate]=1
+    _copilot_candidates+=("$_copilot_candidate")
+  done
+  (( ${#_copilot_candidates[@]} > 0 )) || _copilot_candidates=("$command")
+  _COPILOT_ZLE_CANDIDATES=("${_copilot_candidates[@]}")
   _COPILOT_ZLE_CANDIDATE_IDX=1
 
   _copilot_zle_debug_log "BUFFER set: len=${#BUFFER}"
@@ -1126,16 +1209,17 @@ _copilot_zle_cancel_async() {
 # ── Daemon Request Path ──────────────────────────────────────────────
 _copilot_zle_send_via_daemon() {
   local payload="$1" mode="$2"
-  local helpers_dir
-  helpers_dir="$(_copilot_zle_helpers_dir)"
 
-  zmodload -e zsh/net/tcp || zmodload zsh/net/tcp 2>/dev/null || return 1
-
-  ztcp 127.0.0.1 "$_COPILOT_ZLE_DAEMON_PORT" 2>/dev/null || return 1
+  _copilot_zle_daemon_connect 2>/dev/null || return 1
   local tcp_fd=$REPLY
   _COPILOT_ZLE_USING_DAEMON=1
 
-  local request="{\"id\":${RANDOM},\"type\":\"generate\",\"format\":\"zle\",\"payload\":${payload}}"
+  local request
+  request="$(_copilot_zle_build_request "generate" "zle" "$payload" 2>/dev/null)"
+  [[ -n "$request" ]] || {
+    ztcp -c "$tcp_fd" 2>/dev/null
+    return 1
+  }
   print -r -u "$tcp_fd" -- "$request"
 
   _copilot_zle_debug_log "daemon request sent on fd=$tcp_fd"
@@ -1161,13 +1245,15 @@ _copilot_zle_send_via_subprocess() {
   builtin exec {_COPILOT_ZLE_RESULT_FD}< <(
     local raw
     raw="$(printf '%s' "$payload" | COPILOT_ZLE_DEBUG="${COPILOT_ZLE_DEBUG:-}" NODE_NO_WARNINGS=1 node "$helper" 2>>"$stderr_target")"
-    local ec err cmd
+    local ec err cmd candidates
     ec="$(printf '%s' "$raw" | jq -r '.error_code // empty' 2>/dev/null)"
-    err="$(printf '%s' "$raw" | jq -r '.error // empty' 2>/dev/null)"
-    cmd="$(printf '%s' "$raw" | jq -r '.command // empty' 2>/dev/null)"
+    err="$(printf '%s' "$raw" | jq -c '.error // ""' 2>/dev/null)"
+    cmd="$(printf '%s' "$raw" | jq -c '.command // ""' 2>/dev/null)"
+    candidates="$(printf '%s' "$raw" | jq -c '(.candidates // []) | map(select(type == "string" and length > 0)) | join("\u001f")' 2>/dev/null)"
     printf '%s\n' "$ec"
     printf '%s\n' "$err"
-    printf '%s' "$cmd"
+    printf '%s\n' "$cmd"
+    printf '%s' "$candidates"
   )
   zle -F "$_COPILOT_ZLE_RESULT_FD" _copilot_zle_result_handler
 
@@ -1296,10 +1382,12 @@ copilot_zle_generate() {
 _copilot_zle_explain_result_handler() {
   local fd=$1
   if [[ -z "$2" || "$2" == "hup" ]]; then
-    local skip1="" skip2="" explanation=""
-    read -r -u $fd skip1 2>/dev/null
-    read -r -u $fd skip2 2>/dev/null
-    IFS='' read -rd '' -u $fd explanation 2>/dev/null
+    local error_code="" explanation_json="" skip="" rest="" explanation=""
+    read -r -u $fd error_code 2>/dev/null
+    read -r -u $fd explanation_json 2>/dev/null
+    read -r -u $fd skip 2>/dev/null
+    IFS='' read -rd '' -u $fd rest 2>/dev/null
+    explanation="$(_copilot_zle_json_get "$explanation_json" '.' 2>/dev/null)"
 
     if [[ -n "$explanation" ]]; then
       _copilot_zle_explain_message "$explanation"
@@ -1334,18 +1422,25 @@ copilot_zle_explain() {
     return
   fi
 
-  zmodload -e zsh/net/tcp || zmodload zsh/net/tcp 2>/dev/null || return
-
-  ztcp 127.0.0.1 "$_COPILOT_ZLE_DAEMON_PORT" 2>/dev/null || {
+  _copilot_zle_daemon_connect 2>/dev/null || {
     _copilot_zle_explain_message "Daemon connection failed."
     return
   }
   local tcp_fd=$REPLY
 
-  local escaped_cmd
-  escaped_cmd="$(printf '%s' "$command" | jq -Rs '.' 2>/dev/null || echo '""')"
-
-  local request="{\"id\":${RANDOM},\"type\":\"explain\",\"format\":\"zle\",\"payload\":{\"command\":${escaped_cmd},\"cwd\":\"${PWD}\",\"home\":\"${HOME}\"}}"
+  local payload request
+  payload="$(jq -n -c \
+    --arg command "$command" \
+    --arg cwd "$PWD" \
+    --arg home "$HOME" \
+    --arg model "$(_copilot_zle_effective_model)" \
+    '{ command: $command, cwd: $cwd, home: $home, model: $model }' 2>/dev/null)"
+  request="$(_copilot_zle_build_request "explain" "zle" "$payload" 2>/dev/null)"
+  [[ -n "$request" ]] || {
+    ztcp -c "$tcp_fd" 2>/dev/null
+    _copilot_zle_explain_message "Explain request build failed."
+    return
+  }
   print -r -u "$tcp_fd" -- "$request"
 
   _COPILOT_ZLE_USING_DAEMON=1
