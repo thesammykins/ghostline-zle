@@ -44,18 +44,34 @@ assert.equal(sanitizeCommand("first\nsecond"), "");
   const input = parseInput(JSON.stringify({
     prompt: "list files",
     mode: "generate",
+    model: "claude-sonnet-4.6",
     recentHistory: "ls\npwd",
     gitSummary: "main [dirty]",
     lastFailure: "",
     lastStderr: "",
+    cwd: "/tmp/project",
+    home: "/Users/test",
+    dotfiles: "/Users/test/.dotfiles",
+    shell: "/bin/zsh",
+    termProgram: "Ghostty",
+    inGitRepo: "true",
+    aliasContextRaw: "alias ls='eza'",
     priorAi: { prompt: "", command: "" },
   }));
   assert.equal(input.prompt, "list files");
   assert.equal(input.mode, "generate");
+  assert.equal(input.model, "claude-sonnet-4.6");
   assert.equal(input.recentHistory, "ls\npwd");
   assert.equal(input.gitSummary, "main [dirty]");
   assert.equal(input.lastFailure, "");
   assert.equal(input.lastStderr, "");
+  assert.equal(input.cwd, "/tmp/project");
+  assert.equal(input.home, "/Users/test");
+  assert.equal(input.dotfiles, "/Users/test/.dotfiles");
+  assert.equal(input.shell, "/bin/zsh");
+  assert.equal(input.termProgram, "Ghostty");
+  assert.equal(input.inGitRepo, "true");
+  assert.equal(input.aliasContextRaw, "alias ls='eza'");
   assert.equal(input.priorAi.prompt, "");
   assert.equal(input.priorAi.command, "");
 }
@@ -97,6 +113,8 @@ assert.equal(sanitizeCommand("first\nsecond"), "");
   assert.equal(input.prompt, "list all docker containers");
   assert.equal(input.mode, "generate");
   assert.equal(input.recentHistory, "");
+  assert.equal(input.model, "");
+  assert.equal(input.cwd, "");
 }
 
 // Malformed JSON falls back to raw text
@@ -104,6 +122,7 @@ assert.equal(sanitizeCommand("first\nsecond"), "");
   const input = parseInput("{broken json");
   assert.equal(input.prompt, "{broken json");
   assert.equal(input.mode, "generate");
+  assert.equal(input.model, "");
 }
 
 // Empty / null / undefined
@@ -337,6 +356,8 @@ assert.equal(sanitizeCommand("first\rsecond"), "");
   assert.equal(input.gitSummary, "");
   assert.equal(input.lastFailure, "");
   assert.equal(input.lastStderr, "");
+  assert.equal(input.cwd, "");
+  assert.equal(input.aliasContextRaw, "");
   assert.equal(input.priorAi.prompt, "");
   assert.equal(input.priorAi.command, "");
 }
