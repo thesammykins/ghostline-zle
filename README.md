@@ -99,6 +99,7 @@ When a suggestion or autofix flow reacts to a failed command, the status line no
 
 The shipped config now keeps the more aggressive features opt-in:
 
+- `model.default = gpt-5-mini`
 - `suggest.enabled = false`
 - `nlDetection.enabled = false`
 - `autofix.enabled = false`
@@ -111,10 +112,50 @@ This keeps the default install predictable and avoids false positives from natur
 
 The main config file is `./config.json`.
 
+If you synced the plugin into your dotfiles, edit the `config.json` that lives next to the sourced `ghostline-zle.zsh` entrypoint. For example:
+
+- `~/.dotfiles/zsh/plugins/mcrn-ai/config.json`
+
+Minimal example:
+
+```json
+{
+  "model": {
+    "default": "gpt-5-mini"
+  },
+  "daemon": {
+    "enabled": true,
+    "idleTimeoutSec": 300
+  },
+  "suggest": {
+    "enabled": false
+  },
+  "nlDetection": {
+    "enabled": false
+  },
+  "autofix": {
+    "enabled": false
+  }
+}
+```
+
+Model selection precedence is:
+
+1. `COPILOT_ZLE_MODEL`, if it is set in the shell
+2. `model.default` from the active config file
+3. shipped fallback `gpt-5-mini`
+
+Reload behavior:
+
+- exporting `COPILOT_ZLE_MODEL` affects new requests in the current shell immediately
+- editing `config.json` requires `exec zsh` or re-sourcing the plugin so the shell cache refreshes
+- daemon restart is not required for model changes once the shell has reloaded, because requests now send the model explicitly
+
 You can point the plugin at another config with:
 
 ```sh
 export COPILOT_ZLE_CONFIG_FILE=/absolute/path/to/config.json
+exec zsh
 ```
 
 Useful sections:
@@ -192,6 +233,23 @@ If NL detection is too eager after you enable it:
 - use `Esc+Enter` to force shell execution
 - note that commands with leading env assignments such as `MOTD_FORCE=1 bash "scripts/motd.sh"` are now treated as shell commands, not prose
 
+If model or config changes do not seem to apply:
+
+- check `echo "${COPILOT_ZLE_MODEL:-<unset>}"`
+- check `jq -r '.model.default' /path/to/config.json`
+- after editing `config.json`, run `exec zsh`
+- confirm you edited the config file that sits next to the sourced plugin entrypoint
+
+If you need verbose logs:
+
+```sh
+export COPILOT_ZLE_DEBUG=1
+export COPILOT_ZLE_DEBUG_LOG=/tmp/copilot-zle-debug.log
+tail -f /tmp/copilot-zle-debug.log
+```
+
+That log includes shell widget flow, request payloads, daemon lifecycle messages, helper latency, and classified errors.
+
 ## Development
 
 Run the full checks with:
@@ -200,7 +258,7 @@ Run the full checks with:
 npm run check
 ```
 
-The current test suite covers helper logic, project context, NL-detection heuristics, installer behavior, and shell syntax checks.
+The current test suite covers helper logic, logic/runtime regressions, project context, NL-detection heuristics, installer behavior, and shell syntax checks.
 
 Useful direct commands:
 
@@ -208,6 +266,8 @@ Useful direct commands:
 node ./tests/copilot-helper.test.mjs
 node ./tests/flight-log.test.mjs
 node ./tests/project-context.test.mjs
+node ./tests/logic-regressions.test.mjs
+node ./tests/runtime-regressions.test.mjs
 zsh ./tests/nl-detection.test.zsh
 zsh ./tests/failure-indicator.test.zsh
 node ./tests/install-script.test.mjs
