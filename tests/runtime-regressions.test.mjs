@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { CopilotService } from "../lib/copilot-service.mjs";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-zle-runtime-"));
 
@@ -99,6 +100,58 @@ process.on("exit", cleanup);
   } else {
     delete process.env.COPILOT_ZLE_MODEL;
   }
+}
+
+// ── apply-result cleanup leaves next request unwedged ───────────────
+{
+  const state = {
+    asyncActive: 1,
+    resultFd: "12",
+    spinnerFd: "13",
+    resultPid: "4567",
+    resultFile: "/tmp/copilot-zle-result.test",
+  };
+
+  const cleanupAfterApply = (current) => ({
+    ...current,
+    asyncActive: 0,
+    resultFd: "",
+    spinnerFd: "",
+    resultPid: "",
+    resultFile: "",
+  });
+
+  assert.deepEqual(cleanupAfterApply(state), {
+    asyncActive: 0,
+    resultFd: "",
+    spinnerFd: "",
+    resultPid: "",
+    resultFile: "",
+  });
+}
+
+// ── explain mode does not reject when model cache is empty ───────────
+{
+  const service = new CopilotService({ model: "gpt-5-mini" });
+  service.started = true;
+  service.client = {
+    createSession: async () => ({
+      sendAndWait: async () => ({ data: { content: "LISTS FILES" } }),
+      disconnect: async () => undefined,
+    }),
+  };
+  service.approveAll = () => {};
+  service.supportedModelIds = new Set();
+
+  const result = await service.explain({
+    command: "ls",
+    model: "gpt-5-mini",
+    cwd: process.cwd(),
+    home: process.env.HOME || "",
+  });
+
+  assert.equal(result.explanation, "LISTS FILES");
+  assert.equal(result.error, undefined);
 }
 
 console.log("runtime regression tests passed");
