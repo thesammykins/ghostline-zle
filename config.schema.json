@@ -133,13 +133,13 @@
           "type": "integer",
           "minimum": 30,
           "maximum": 3600,
-          "default": 300,
+          "default": 1800,
           "description": "Seconds of inactivity before the daemon auto-exits."
         }
       },
       "default": {
         "enabled": true,
-        "idleTimeoutSec": 300
+        "idleTimeoutSec": 1800
       }
     },
     "suggest": {
@@ -254,14 +254,53 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 10,
-          "default": 3,
+          "default": 2,
           "description": "Number of relevant past successes to inject as few-shot examples."
         }
       },
       "default": {
         "enabled": true,
         "maxEntries": 1000,
-        "fewShotCount": 3
+        "fewShotCount": 2
+      }
+    },
+    "patterns": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable local prompt-pattern resolution before invoking Copilot."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["file", "config"],
+          "default": "file",
+          "description": "Load patterns from a sibling patterns.json file or inline config entries."
+        },
+        "entries": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string" },
+              "mode": { "type": "string" },
+              "regex": { "type": "string" },
+              "flags": { "type": "string" },
+              "command": { "type": "string" }
+            },
+            "required": ["regex", "command"]
+          },
+          "description": "Inline prompt patterns used when patterns.source is set to config."
+        }
+      },
+      "default": {
+        "enabled": true,
+        "source": "file",
+        "entries": []
       }
     },
     "branding": {

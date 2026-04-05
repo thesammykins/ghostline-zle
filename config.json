@@ -22,7 +22,7 @@
   },
   "daemon": {
     "enabled": true,
-    "idleTimeoutSec": 300
+    "idleTimeoutSec": 1800
   },
   "suggest": {
     "enabled": false,
@@ -43,7 +43,12 @@
   "flightLog": {
     "enabled": true,
     "maxEntries": 1000,
-    "fewShotCount": 3
+    "fewShotCount": 2
+  },
+  "patterns": {
+    "enabled": true,
+    "source": "file",
+    "entries": []
   },
   "branding": {
     "productName": "ghostline-zle",

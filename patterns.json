@@ -1,0 +1,16 @@
+[
+  {
+    "name": "list-files-in-path",
+    "mode": "generate",
+    "regex": "^(?:show|list|find)(?: me)?(?: all)? files(?: in)? (?<target>.+)$",
+    "flags": "i",
+    "command": "command find \"{target}\" -type f -print | sed \"s:^$HOME:~:\" | sort"
+  },
+  {
+    "name": "list-files-here",
+    "mode": "generate",
+    "regex": "^(?:show|list)(?: me)?(?: all)? files(?: here| in this directory)?$",
+    "flags": "i",
+    "command": "command find . -type f -print | sed \"s:^\\./::\" | sort"
+  }
+]
