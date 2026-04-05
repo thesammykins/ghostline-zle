@@ -3,6 +3,19 @@
 # Engine: Copilot SDK
 # Model: gpt-5-mini
 
+if [[ -n "${_COPILOT_ZLE_CORE_LOADED_FROM:-}" ]]; then
+  if [[ "${_COPILOT_ZLE_CORE_LOADED_FROM}" != "${(%):-%N}" ]]; then
+    print -u2 -- "copilot-zle: shell core already loaded from ${_COPILOT_ZLE_CORE_LOADED_FROM}; skipping duplicate source from ${(%):-%N}"
+  fi
+  return 0
+fi
+typeset -g _COPILOT_ZLE_CORE_LOADED_FROM="${(%):-%N}"
+
+if [[ -z "${COPILOT_ZLE_ROOT_DIR:-}" ]]; then
+  typeset -g _COPILOT_ZLE_CORE_PATH="${(%):-%N}"
+  export COPILOT_ZLE_ROOT_DIR="${_COPILOT_ZLE_CORE_PATH:A:h:h}"
+fi
+
 # ── Configuration ────────────────────────────────────────────────────
 export COPILOT_ZLE_TIMEOUT_MS="${COPILOT_ZLE_TIMEOUT_MS:-30000}"
 export COPILOT_ZLE_MODEL="${COPILOT_ZLE_MODEL:-}"
@@ -20,6 +33,8 @@ typeset -g  _COPILOT_ZLE_GENERATED_BUFFER=""
 typeset -gi _COPILOT_ZLE_ASYNC_ACTIVE=0
 typeset -g  _COPILOT_ZLE_ASYNC_MODE=""
 typeset -g  _COPILOT_ZLE_RESULT_FD=""
+typeset -g  _COPILOT_ZLE_RESULT_PID=""
+typeset -g  _COPILOT_ZLE_RESULT_FILE=""
 typeset -g  _COPILOT_ZLE_SPINNER_FD=""
 # Pending result (written by zle -F handler, consumed by apply widget)
 typeset -g  _COPILOT_ZLE_PENDING_CMD=""
@@ -30,6 +45,9 @@ typeset -g  _COPILOT_ZLE_PENDING_RAW=""
 typeset -g  _COPILOT_ZLE_CFG_MODEL_DEFAULT=""
 typeset -g  _COPILOT_ZLE_CFG_HIGHLIGHT_ENABLED=""
 typeset -g  _COPILOT_ZLE_CFG_HIGHLIGHT_STYLE=""
+typeset -gi _COPILOT_ZLE_CFG_CONTEXT_HISTORY_COUNT=5
+typeset -g  _COPILOT_ZLE_CFG_CONTEXT_INCLUDE_GIT=""
+typeset -g  _COPILOT_ZLE_CFG_CONTEXT_INCLUDE_FAILURE=""
 typeset -gi _COPILOT_ZLE_SPINNER_IDX=0
 typeset -ga _COPILOT_ZLE_SPINNER_FRAMES=()
 # Daemon state
@@ -66,11 +84,19 @@ typeset -ga _COPILOT_ZLE_CANDIDATES=()
 typeset -gi _COPILOT_ZLE_CANDIDATE_IDX=0
 # Flight log + queued prompt message tracking
 typeset -g  _COPILOT_ZLE_TRACKING_EXECUTION=""
+typeset -g  _COPILOT_ZLE_LAST_HANDOFF_PROMPT=""
+typeset -gi _COPILOT_ZLE_REQUEST_STARTED_AT=0
+typeset -g  _COPILOT_ZLE_LAST_GIT_CWD=""
+typeset -g  _COPILOT_ZLE_LAST_GIT_SUMMARY=""
+typeset -g  _COPILOT_ZLE_LAST_GIT_IN_REPO="false"
+typeset -g  _COPILOT_ZLE_LAST_ALIAS_CONTEXT=""
 
 # ── Hooks: track last command, exit code, and stderr (SAM-40) ────────
 autoload -Uz add-zsh-hook
+zmodload zsh/datetime 2>/dev/null || true
 
 _copilot_zle_preexec() {
+  _copilot_zle_clear_prompt_state
   _COPILOT_ZLE_LAST_EXECUTED_COMMAND="$1"
   # Track if this was an AI-generated command (for flight log feedback)
   if [[ -n "$_COPILOT_ZLE_LAST_AI_COMMAND" && "$1" == "$_COPILOT_ZLE_LAST_AI_COMMAND" ]]; then
@@ -99,14 +125,18 @@ _copilot_zle_precmd() {
   fi
 }
 
-add-zsh-hook preexec _copilot_zle_preexec
-add-zsh-hook precmd  _copilot_zle_precmd
+if [[ -z "${_COPILOT_ZLE_HOOKS_REGISTERED:-}" ]]; then
+  add-zsh-hook preexec _copilot_zle_preexec
+  add-zsh-hook precmd  _copilot_zle_precmd
+  typeset -g _COPILOT_ZLE_HOOKS_REGISTERED=1
+fi
 
 # ── Highlight + ghost-text clear hook ─────────────────────────────────
-if autoload -Uz add-zle-hook-widget 2>/dev/null; then
+if [[ -z "${_COPILOT_ZLE_ZLE_HOOKS_REGISTERED:-}" ]] && autoload -Uz add-zle-hook-widget 2>/dev/null; then
   add-zle-hook-widget line-init _copilot_zle_flush_pending_message 2>/dev/null || true
   add-zle-hook-widget line-pre-redraw _copilot_zle_ghost_line_changed 2>/dev/null || true
   add-zle-hook-widget line-pre-redraw _copilot_zle_flush_pending_message 2>/dev/null || true
+  typeset -g _COPILOT_ZLE_ZLE_HOOKS_REGISTERED=1
 fi
 
 # ── Config Reader (SAM-44) ───────────────────────────────────────────
@@ -228,6 +258,9 @@ _copilot_zle_reload_cached_config() {
   _COPILOT_ZLE_CFG_MODEL_DEFAULT="$(_copilot_zle_read_config '.model.default' 'gpt-5-mini')"
   _COPILOT_ZLE_CFG_HIGHLIGHT_ENABLED="$(_copilot_zle_read_config '.ui.highlightAiBuffer' 'true')"
   _COPILOT_ZLE_CFG_HIGHLIGHT_STYLE="$(_copilot_zle_read_config '.ui.highlightStyle' 'underline')"
+  _COPILOT_ZLE_CFG_CONTEXT_HISTORY_COUNT="$(_copilot_zle_read_config '.context.recentHistoryCount' '5')"
+  _COPILOT_ZLE_CFG_CONTEXT_INCLUDE_GIT="$(_copilot_zle_read_config '.context.includeGitSummary' 'true')"
+  _COPILOT_ZLE_CFG_CONTEXT_INCLUDE_FAILURE="$(_copilot_zle_read_config '.context.includeLastFailure' 'true')"
   _COPILOT_ZLE_CFG_DAEMON_ENABLED="$(_copilot_zle_read_config '.daemon.enabled' 'true')"
   _COPILOT_ZLE_CFG_SUGGEST_ENABLED="$(_copilot_zle_read_config '.suggest.enabled' 'false')"
   _COPILOT_ZLE_CFG_SUGGEST_GHOST_STYLE="$(_copilot_zle_read_config '.suggest.ghostStyle' 'fg=240')"
@@ -250,6 +283,7 @@ _copilot_zle_reload_cached_config() {
     "${_COPILOT_ZLE_CFG_BRAND_THINKING_LABEL}..."
     "${_COPILOT_ZLE_CFG_BRAND_THINKING_LABEL}...."
   )
+  _copilot_zle_refresh_shell_context
 }
 
 _copilot_zle_effective_model() {
@@ -268,6 +302,233 @@ _copilot_zle_json_get() {
   local raw="$1" filter="$2"
   [[ -n "$raw" ]] || return 0
   printf '%s' "$raw" | jq -r "$filter" 2>/dev/null
+}
+
+_copilot_zle_now_ms() {
+  if [[ -n "${EPOCHREALTIME:-}" ]]; then
+    printf '%.0f' "$(( EPOCHREALTIME * 1000 ))"
+    return
+  fi
+  printf '%s000' "$(date +%s)"
+}
+
+_copilot_zle_clear_prompt_state() {
+  unset GHOSTLINE_MODE GHOSTLINE_RISK GHOSTLINE_LATENCY GHOSTLINE_STATUS GHOSTLINE_PROMPT_STATUS
+}
+
+_copilot_zle_refresh_live_rprompt() {
+  [[ -n "${WIDGET:-}" ]] || return 0
+
+  if whence -w prompt_starship_precmd >/dev/null 2>&1; then
+    prompt_starship_precmd 2>/dev/null || true
+  fi
+
+  if (( _COPILOT_ZLE_ASYNC_ACTIVE )) && [[ -n "${GHOSTLINE_PROMPT_STATUS:-}" ]]; then
+    RPROMPT="${GHOSTLINE_PROMPT_STATUS}"
+  elif [[ -n "${_COPILOT_ZLE_RPROMPT_BASE:-}" ]]; then
+    RPROMPT="${_COPILOT_ZLE_RPROMPT_BASE}"
+  else
+    RPROMPT=""
+  fi
+}
+
+_copilot_zle_can_reset_prompt() {
+  [[ -n "${WIDGET:-}" ]] || return 1
+
+  # Preserve the current input line while a request is still thinking, or when
+  # an error leaves the user's original natural-language buffer in place.
+  if (( _COPILOT_ZLE_ASYNC_ACTIVE )); then
+    return 1
+  fi
+
+  [[ -n "${BUFFER:-}" ]] || return 0
+
+  if [[ -n "$_COPILOT_ZLE_LAST_AI_COMMAND" && "$BUFFER" == "$_COPILOT_ZLE_LAST_AI_COMMAND" ]]; then
+    return 0
+  fi
+
+  if [[ -n "$_COPILOT_ZLE_GENERATED_BUFFER" && "$BUFFER" == "$_COPILOT_ZLE_GENERATED_BUFFER" ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+_copilot_zle_set_prompt_state() {
+  local mode="$1" risk="$2" latency="$3"
+  if [[ -n "$mode" ]]; then
+    export GHOSTLINE_MODE="$mode"
+  else
+    unset GHOSTLINE_MODE
+  fi
+  if [[ -n "$risk" ]]; then
+    export GHOSTLINE_RISK="$risk"
+  else
+    unset GHOSTLINE_RISK
+  fi
+  if [[ -n "$latency" ]]; then
+    export GHOSTLINE_LATENCY="$latency"
+  else
+    unset GHOSTLINE_LATENCY
+  fi
+  if [[ -n "$mode" ]]; then
+    local status_text="AI ${mode}"
+    local prompt_icon=""
+    local prompt_mode="${(L)mode}"
+    local prompt_status=""
+    case "$mode" in
+      GEN) prompt_mode="gen" ;;
+      REF) prompt_mode="ref" ;;
+      CHAIN) prompt_mode="pipe" ;;
+      FIX) prompt_mode="fix" ;;
+      OC) prompt_mode="oc" ;;
+    esac
+    if [[ -n "$risk" ]]; then
+      status_text="${status_text} ${risk}"
+    fi
+    if [[ -n "$latency" ]]; then
+      status_text="${status_text} ${latency}"
+    fi
+    export GHOSTLINE_STATUS="$status_text"
+    prompt_status="${prompt_icon} ${prompt_mode}"
+    if [[ -n "$risk" ]]; then
+      prompt_status="${prompt_status} ${(L)risk}"
+    fi
+    if [[ -n "$latency" ]]; then
+      prompt_status="${prompt_status} ${latency}"
+    fi
+    export GHOSTLINE_PROMPT_STATUS="$prompt_status"
+  else
+    export GHOSTLINE_STATUS="AI IDLE"
+    export GHOSTLINE_PROMPT_STATUS=" idle"
+  fi
+
+  _copilot_zle_refresh_live_rprompt
+
+  if _copilot_zle_can_reset_prompt; then
+    zle reset-prompt 2>/dev/null || zle -R 2>/dev/null || true
+  else
+    _copilot_zle_refresh_live_rprompt
+  fi
+
+}
+
+_copilot_zle_refresh_shell_context() {
+  _COPILOT_ZLE_LAST_ALIAS_CONTEXT="$(alias ls cat grep find du 2>/dev/null || true)"
+
+  if [[ "$_COPILOT_ZLE_CFG_CONTEXT_INCLUDE_GIT" != "true" ]]; then
+    _COPILOT_ZLE_LAST_GIT_CWD="$PWD"
+    _COPILOT_ZLE_LAST_GIT_SUMMARY=""
+    _COPILOT_ZLE_LAST_GIT_IN_REPO="false"
+    return
+  fi
+
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    local branch dirty=""
+    branch="$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || print detached)"
+    if ! git diff --quiet HEAD 2>/dev/null; then
+      dirty=" [dirty]"
+    fi
+    _COPILOT_ZLE_LAST_GIT_CWD="$PWD"
+    _COPILOT_ZLE_LAST_GIT_SUMMARY="${branch}${dirty}"
+    _COPILOT_ZLE_LAST_GIT_IN_REPO="true"
+    return
+  fi
+
+  _COPILOT_ZLE_LAST_GIT_CWD="$PWD"
+  _COPILOT_ZLE_LAST_GIT_SUMMARY=""
+  _COPILOT_ZLE_LAST_GIT_IN_REPO="false"
+}
+
+_copilot_zle_mode_label() {
+  case "$1" in
+    fix) print -r -- "FIX" ;;
+    refine) print -r -- "REF" ;;
+    chain) print -r -- "CHAIN" ;;
+    handoff) print -r -- "OC" ;;
+    *) print -r -- "GEN" ;;
+  esac
+}
+
+_copilot_zle_command_risk() {
+  local text="${(L)1}"
+  case "$text" in
+    *"rm -rf"*|*"mkfs"*|*"dd if="*|*"shutdown"*|*"reboot"*|*"poweroff"*|*"diskutil erase"*)
+      print -r -- "DEST"
+      return
+      ;;
+  esac
+  case "$text" in
+    sudo\ *|*" sudo "*)
+      print -r -- "ROOT"
+      return
+      ;;
+  esac
+  case "$text" in
+    *"curl "*|*"wget "*|*"ssh "*|*"scp "*|*"rsync "*|*"nc "*|*"ping "*|*"dig "*|*"nslookup "*)
+      print -r -- "NET"
+      return
+      ;;
+  esac
+  case "$text" in
+    *">"*|*">>"*|*" tee "*|*" mv "*|*" cp "*|*"mkdir "*|*"touch "*|*"chmod "*|*"chown "*|*"sed -i"*|*"perl -pi"*|*"npm install"*|*"brew install"*|*"git add "*|*"git commit"*|*"git push"*|*"git checkout "*|*"git switch "*|*"git restore "*|*"git reset "*)
+      print -r -- "MOD"
+      return
+      ;;
+  esac
+  print -r -- ""
+}
+
+_copilot_zle_should_handoff_to_opencode() {
+  local prompt="${(L)1}"
+  [[ -n "$prompt" ]] || return 1
+  case "$prompt" in
+    *"implement "*|*"debug "*|*"diagnose "*|*"investigate "*|*"review "*|*"refactor "*|*"fix bug"*|*"fix this"*|*"why is "*|*"what's wrong"*|*"write a script"*|*"write me a script"*|*"add feature"*|*"create a tool"*|*"search code"*|*"find in repo"*|*"read the code"*|*"plan "*|*"set up "*|*"configure "*|*"build me "*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+_copilot_zle_opencode_runner() {
+  local dotfiles_root="${DOTFILES:-$HOME/.dotfiles}"
+  if [[ -x "$dotfiles_root/scripts/run-opencode.sh" ]]; then
+    print -r -- "$dotfiles_root/scripts/run-opencode.sh"
+    return 0
+  fi
+  if [[ -x "$(command -v opencode)" ]]; then
+    print -r -- "$(command -v opencode)"
+    return 0
+  fi
+  return 1
+}
+
+copilot_zle_handoff_opencode() {
+  local prompt="$BUFFER"
+  [[ -n "$prompt" ]] || prompt="${_COPILOT_ZLE_LAST_HANDOFF_PROMPT:-$_COPILOT_ZLE_LAST_AI_QUERY}"
+
+  local runner
+  runner="$(_copilot_zle_opencode_runner 2>/dev/null)" || {
+    _copilot_zle_error_message "opencode not found."
+    return 1
+  }
+
+  local -a cmd
+  cmd=("$runner" "$PWD")
+  if [[ -n "$prompt" ]]; then
+    cmd+=(--prompt "$prompt")
+  fi
+
+  _COPILOT_ZLE_LAST_HANDOFF_PROMPT=""
+  local tty_state
+  tty_state="$(_copilot_zle_capture_tty_state)"
+  zle -I
+  print -r -- ""
+  print -r -- "opening opencode..."
+  command "${cmd[@]}"
+  _copilot_zle_restore_tty_state "$tty_state"
+  zle reset-prompt
+  zle -R
 }
 
 _copilot_zle_build_request() {
@@ -886,12 +1147,9 @@ _copilot_zle_build_payload() {
   local prompt="$1"
   local mode="$2"
 
-  local history_count
-  history_count="$(_copilot_zle_read_config '.context.recentHistoryCount' '5')"
-  local include_git
-  include_git="$(_copilot_zle_read_config '.context.includeGitSummary' 'true')"
-  local include_failure
-  include_failure="$(_copilot_zle_read_config '.context.includeLastFailure' 'true')"
+  local history_count="${_COPILOT_ZLE_CFG_CONTEXT_HISTORY_COUNT:-5}"
+  local include_git="${_COPILOT_ZLE_CFG_CONTEXT_INCLUDE_GIT:-true}"
+  local include_failure="${_COPILOT_ZLE_CFG_CONTEXT_INCLUDE_FAILURE:-true}"
 
   local recent_history=""
   if (( history_count > 0 )); then
@@ -900,17 +1158,11 @@ _copilot_zle_build_payload() {
     fi
   fi
 
-  local git_summary=""
-  if [[ "$include_git" == "true" ]]; then
-    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-      local branch dirty=""
-      branch="$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo "detached")"
-      if ! git diff --quiet HEAD 2>/dev/null; then
-        dirty=" [dirty]"
-      fi
-      git_summary="${branch}${dirty}"
-    fi
+  if [[ "$_COPILOT_ZLE_LAST_GIT_CWD" != "$PWD" ]]; then
+    _copilot_zle_refresh_shell_context
   fi
+
+  local git_summary="$_COPILOT_ZLE_LAST_GIT_SUMMARY"
 
   local last_failure=""
   if [[ "$mode" == "fix" && "$include_failure" == "true" ]]; then
@@ -929,14 +1181,10 @@ _copilot_zle_build_payload() {
   fi
 
   # Environment context — critical for daemon which has stale process.env
-  local in_git_repo="false"
-  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    in_git_repo="true"
-  fi
+  local in_git_repo="$_COPILOT_ZLE_LAST_GIT_IN_REPO"
 
-  # Gather key aliases (ls, cat, grep, find, du — the ones the model should prefer)
-  local alias_context=""
-  alias_context="$(alias ls cat grep find du 2>/dev/null || echo "")"
+  # Gather key aliases once per cwd refresh instead of every request.
+  local alias_context="$_COPILOT_ZLE_LAST_ALIAS_CONTEXT"
 
   jq -n -c \
     --arg prompt "$prompt" \
@@ -980,6 +1228,11 @@ _copilot_zle_build_payload() {
 # ── Copilot Preflight Checks ────────────────────────────────────────
 # Returns 0 if all prerequisites are met, 1 otherwise.
 _copilot_zle_preflight() {
+  if [[ ! -x "$(command -v node)" ]]; then
+    _copilot_zle_error_message "Node not found."
+    return 1
+  fi
+
   local helpers_dir
   helpers_dir="$(_copilot_zle_helpers_dir)"
   if [[ ! -f "$helpers_dir/lib/copilot-helper.mjs" ]]; then
@@ -988,10 +1241,6 @@ _copilot_zle_preflight() {
   fi
   if [[ ! -d "$helpers_dir/node_modules/@github/copilot-sdk" ]]; then
     _copilot_zle_error_message "GitHub Copilot SDK not installed. Run npm ci in the plugin directory."
-    return 1
-  fi
-  if [[ ! -x "$(command -v node)" ]]; then
-    _copilot_zle_error_message "Node not found."
     return 1
   fi
   local node_major
@@ -1003,10 +1252,24 @@ _copilot_zle_preflight() {
   return 0
 }
 
+_copilot_zle_daemon_prewarm() {
+  return
+}
+
 # ── Async Spinner Handler (SAM-45) ──────────────────────────────────
 _copilot_zle_spinner_handler() {
   local fd="$1"
   local line=""
+  if [[ -n "$_COPILOT_ZLE_RESULT_FILE" && -s "$_COPILOT_ZLE_RESULT_FILE" ]]; then
+    local result_fd
+    builtin exec {result_fd}<"$_COPILOT_ZLE_RESULT_FILE"
+    _COPILOT_ZLE_RESULT_FD="$result_fd"
+    rm -f "$_COPILOT_ZLE_RESULT_FILE" 2>/dev/null || true
+    _COPILOT_ZLE_RESULT_FILE=""
+    _COPILOT_ZLE_RESULT_PID=""
+    _copilot_zle_result_handler "$result_fd" "hup"
+    return
+  fi
   if ! read -r -u "$fd" line 2>/dev/null; then
     # Spinner process ended (SIGPIPE from fd close or natural exit)
     zle -F "$fd" 2>/dev/null
@@ -1016,7 +1279,7 @@ _copilot_zle_spinner_handler() {
   fi
   if (( _COPILOT_ZLE_ASYNC_ACTIVE )); then
     _COPILOT_ZLE_SPINNER_IDX=$(( (_COPILOT_ZLE_SPINNER_IDX % ${#_COPILOT_ZLE_SPINNER_FRAMES[@]}) + 1 ))
-    _copilot_zle_status_message "${_COPILOT_ZLE_SPINNER_FRAMES[$_COPILOT_ZLE_SPINNER_IDX]}"
+    _copilot_zle_refresh_live_rprompt
     zle -R
   fi
 }
@@ -1063,6 +1326,11 @@ _copilot_zle_result_handler() {
   fi
   zle -F "$fd" 2>/dev/null
   _COPILOT_ZLE_RESULT_FD=""
+  _COPILOT_ZLE_RESULT_PID=""
+  if [[ -n "$_COPILOT_ZLE_RESULT_FILE" ]]; then
+    rm -f "$_COPILOT_ZLE_RESULT_FILE" 2>/dev/null || true
+    _COPILOT_ZLE_RESULT_FILE=""
+  fi
 }
 
 # ── Apply Result Widget ─────────────────────────────────────────────
@@ -1074,15 +1342,48 @@ _copilot_zle_apply_result() {
   local error_code="$_COPILOT_ZLE_PENDING_EC"
   local candidate_blob="$_COPILOT_ZLE_PENDING_RAW"
   local mode="$_COPILOT_ZLE_ASYNC_MODE"
+  local latency_ms=""
+
+  # Results can arrive through multiple transports; make post-apply cleanup
+  # idempotent so the next Ctrl+G always starts a fresh request.
+  _COPILOT_ZLE_ASYNC_ACTIVE=0
+  if [[ -n "$_COPILOT_ZLE_RESULT_FD" ]]; then
+    zle -F "$_COPILOT_ZLE_RESULT_FD" 2>/dev/null
+    if (( _COPILOT_ZLE_USING_DAEMON )); then
+      ztcp -c "$_COPILOT_ZLE_RESULT_FD" 2>/dev/null
+    else
+      builtin exec {_COPILOT_ZLE_RESULT_FD}<&- 2>/dev/null
+    fi
+    _COPILOT_ZLE_RESULT_FD=""
+  fi
+  if [[ -n "$_COPILOT_ZLE_SPINNER_FD" ]]; then
+    zle -F "$_COPILOT_ZLE_SPINNER_FD" 2>/dev/null
+    builtin exec {_COPILOT_ZLE_SPINNER_FD}<&- 2>/dev/null
+    _COPILOT_ZLE_SPINNER_FD=""
+  fi
+  if [[ -n "$_COPILOT_ZLE_RESULT_PID" ]]; then
+    kill "$_COPILOT_ZLE_RESULT_PID" 2>/dev/null || true
+    _COPILOT_ZLE_RESULT_PID=""
+  fi
+  if [[ -n "$_COPILOT_ZLE_RESULT_FILE" ]]; then
+    rm -f "$_COPILOT_ZLE_RESULT_FILE" 2>/dev/null || true
+    _COPILOT_ZLE_RESULT_FILE=""
+  fi
 
   _COPILOT_ZLE_PENDING_CMD=""
   _COPILOT_ZLE_PENDING_ERR=""
   _COPILOT_ZLE_PENDING_EC=""
   _COPILOT_ZLE_PENDING_RAW=""
 
+  if (( _COPILOT_ZLE_REQUEST_STARTED_AT > 0 )); then
+    latency_ms="$(( $(_copilot_zle_now_ms) - _COPILOT_ZLE_REQUEST_STARTED_AT ))ms"
+  fi
+  _COPILOT_ZLE_REQUEST_STARTED_AT=0
+
   _copilot_zle_debug_log "apply_result widget: cmd_len=${#command} ec='$error_code' mode=$mode"
 
   if [[ -z "$command" ]]; then
+    _copilot_zle_set_prompt_state "$(_copilot_zle_mode_label "$mode")" "" "$latency_ms"
     case "$error_code" in
       copilot_cli_missing)
         _copilot_zle_error_message "Required CLI dependency missing."
@@ -1162,6 +1463,10 @@ _copilot_zle_apply_result() {
 
   _copilot_zle_debug_log "BUFFER set: len=${#BUFFER}"
 
+  local _copilot_risk
+  _copilot_risk="$(_copilot_zle_command_risk "$command")"
+  _copilot_zle_set_prompt_state "$(_copilot_zle_mode_label "$mode")" "$_copilot_risk" "$latency_ms"
+
   # Apply visual highlight using cached config (SAM-42/44)
   if [[ "$_COPILOT_ZLE_CFG_HIGHLIGHT_ENABLED" == "true" && "$_COPILOT_ZLE_CFG_HIGHLIGHT_STYLE" != "none" ]]; then
     _COPILOT_ZLE_GENERATED_BUFFER="$BUFFER"
@@ -1170,16 +1475,16 @@ _copilot_zle_apply_result() {
 
   case "$mode" in
     fix)
-      _copilot_zle_status_message "FIX APPLIED. REVIEW BEFORE EXECUTION.${_copilot_dry_warn}"
+        _copilot_zle_status_message "FIX APPLIED. REVIEW BEFORE EXECUTION.${_copilot_dry_warn}${_copilot_risk:+ [$_copilot_risk]}${latency_ms:+ [$latency_ms]}"
       ;;
     refine)
-      _copilot_zle_status_message "COMMAND REFINED. REVIEW BEFORE EXECUTION.${_copilot_dry_warn}"
+      _copilot_zle_status_message "COMMAND REFINED. REVIEW BEFORE EXECUTION.${_copilot_dry_warn}${_copilot_risk:+ [$_copilot_risk]}${latency_ms:+ [$latency_ms]}"
       ;;
     chain)
-      _copilot_zle_status_message "PIPELINE EXTENDED. REVIEW BEFORE EXECUTION.${_copilot_dry_warn}"
+      _copilot_zle_status_message "PIPELINE EXTENDED. REVIEW BEFORE EXECUTION.${_copilot_dry_warn}${_copilot_risk:+ [$_copilot_risk]}${latency_ms:+ [$latency_ms]}"
       ;;
     *)
-      _copilot_zle_status_message "COMMAND RECEIVED. REVIEW BEFORE EXECUTION.${_copilot_dry_warn}"
+      _copilot_zle_status_message "COMMAND RECEIVED. REVIEW BEFORE EXECUTION.${_copilot_dry_warn}${_copilot_risk:+ [$_copilot_risk]}${latency_ms:+ [$latency_ms]}"
       ;;
   esac
   zle -R
@@ -1201,6 +1506,14 @@ _copilot_zle_cancel_async() {
     zle -F "$_COPILOT_ZLE_SPINNER_FD" 2>/dev/null
     builtin exec {_COPILOT_ZLE_SPINNER_FD}<&- 2>/dev/null
     _COPILOT_ZLE_SPINNER_FD=""
+  fi
+  if [[ -n "$_COPILOT_ZLE_RESULT_PID" ]]; then
+    kill "$_COPILOT_ZLE_RESULT_PID" 2>/dev/null || true
+    _COPILOT_ZLE_RESULT_PID=""
+  fi
+  if [[ -n "$_COPILOT_ZLE_RESULT_FILE" ]]; then
+    rm -f "$_COPILOT_ZLE_RESULT_FILE" 2>/dev/null || true
+    _COPILOT_ZLE_RESULT_FILE=""
   fi
   _copilot_zle_status_message "REQUEST CANCELLED."
   zle -R
@@ -1242,22 +1555,27 @@ _copilot_zle_send_via_subprocess() {
   if [[ -n "${COPILOT_ZLE_DEBUG:-}" ]]; then
     stderr_target="$COPILOT_ZLE_DEBUG_LOG"
   fi
-  builtin exec {_COPILOT_ZLE_RESULT_FD}< <(
-    local raw
+  local result_file
+  result_file="$(mktemp "${TMPDIR:-/tmp}/copilot-zle-result.XXXXXX")" || return 1
+  _COPILOT_ZLE_RESULT_FILE="$result_file"
+
+  (
+    local raw ec err cmd candidates
     raw="$(printf '%s' "$payload" | COPILOT_ZLE_DEBUG="${COPILOT_ZLE_DEBUG:-}" NODE_NO_WARNINGS=1 node "$helper" 2>>"$stderr_target")"
-    local ec err cmd candidates
     ec="$(printf '%s' "$raw" | jq -r '.error_code // empty' 2>/dev/null)"
     err="$(printf '%s' "$raw" | jq -c '.error // ""' 2>/dev/null)"
     cmd="$(printf '%s' "$raw" | jq -c '.command // ""' 2>/dev/null)"
     candidates="$(printf '%s' "$raw" | jq -c '(.candidates // []) | map(select(type == "string" and length > 0)) | join("\u001f")' 2>/dev/null)"
-    printf '%s\n' "$ec"
-    printf '%s\n' "$err"
-    printf '%s\n' "$cmd"
-    printf '%s' "$candidates"
-  )
-  zle -F "$_COPILOT_ZLE_RESULT_FD" _copilot_zle_result_handler
+    {
+      printf '%s\n' "$ec"
+      printf '%s\n' "$err"
+      printf '%s\n' "$cmd"
+      printf '%s' "$candidates"
+    } >| "$result_file"
+  ) &!
+  _COPILOT_ZLE_RESULT_PID=$!
 
-  _copilot_zle_debug_log "subprocess result fd=$_COPILOT_ZLE_RESULT_FD launched"
+  _copilot_zle_debug_log "subprocess result pid=$_COPILOT_ZLE_RESULT_PID file=$_COPILOT_ZLE_RESULT_FILE launched"
 }
 
 # ── Main ZLE Widget ─────────────────────────────────────────────────
@@ -1272,6 +1590,10 @@ copilot_zle_generate() {
 
   # Clear any ghost-text suggestion
   _copilot_zle_ghost_clear
+
+  if [[ -z "${_COPILOT_ZLE_RPROMPT_BASE+x}" ]]; then
+    typeset -g _COPILOT_ZLE_RPROMPT_BASE="$RPROMPT"
+  fi
 
   local user_input="${BUFFER}"
 
@@ -1333,6 +1655,13 @@ copilot_zle_generate() {
       else
         effective_prompt="$user_input"
         _COPILOT_ZLE_LAST_AI_QUERY="$user_input"
+        if _copilot_zle_should_handoff_to_opencode "$effective_prompt"; then
+          _COPILOT_ZLE_LAST_HANDOFF_PROMPT="$effective_prompt"
+          _copilot_zle_set_prompt_state "OC" "" ""
+          _copilot_zle_fix_message "Larger workflow detected. Press Ctrl+X O to open in opencode."
+          zle -R
+          return
+        fi
         _copilot_zle_status_message "${_COPILOT_ZLE_CFG_BRAND_THINKING_LABEL}..."
       fi
       ;;
@@ -1351,12 +1680,13 @@ copilot_zle_generate() {
     return
   fi
 
-  # Launch async (SAM-45)
+  # Launch async (restored committed behavior with runtime fixes kept)
   _COPILOT_ZLE_ASYNC_MODE="$mode"
   _COPILOT_ZLE_ASYNC_ACTIVE=1
   _COPILOT_ZLE_SPINNER_IDX=0
+  _COPILOT_ZLE_REQUEST_STARTED_AT="$(_copilot_zle_now_ms)"
+  _copilot_zle_set_prompt_state "$(_copilot_zle_mode_label "$mode")" "" "..."
 
-  # Spinner subprocess: writes a line every 300ms for zle -F to pick up
   builtin exec {_COPILOT_ZLE_SPINNER_FD}< <(
     while true; do
       sleep 0.3
@@ -1367,7 +1697,6 @@ copilot_zle_generate() {
 
   _copilot_zle_debug_log "spinner fd=$_COPILOT_ZLE_SPINNER_FD"
 
-  # Try daemon first, fall back to subprocess
   if _copilot_zle_daemon_ensure 2>/dev/null && \
      _copilot_zle_send_via_daemon "$payload" "$mode" 2>/dev/null; then
     _copilot_zle_debug_log "using daemon on port $_COPILOT_ZLE_DAEMON_PORT"
@@ -1448,30 +1777,38 @@ copilot_zle_explain() {
 }
 
 # ── Key Bindings ─────────────────────────────────────────────────────
-zle -N copilot_zle_generate
-zle -N copilot_zle_explain
-zle -N copilot_zle_help
-bindkey '^g' copilot_zle_generate
-bindkey '^e' copilot_zle_explain
-bindkey '^[h' copilot_zle_help 2>/dev/null || true
-bindkey '^[H' copilot_zle_help 2>/dev/null || true
-bindkey '^Xh' copilot_zle_help 2>/dev/null || true
-bindkey '^XH' copilot_zle_help 2>/dev/null || true
-bindkey -M viins '^g' copilot_zle_generate 2>/dev/null || true
-bindkey -M vicmd '^g' copilot_zle_generate 2>/dev/null || true
-bindkey -M viins '^e' copilot_zle_explain 2>/dev/null || true
-bindkey -M vicmd '^e' copilot_zle_explain 2>/dev/null || true
-bindkey -M viins '^[h' copilot_zle_help 2>/dev/null || true
-bindkey -M vicmd '^[h' copilot_zle_help 2>/dev/null || true
-bindkey -M viins '^[H' copilot_zle_help 2>/dev/null || true
-bindkey -M vicmd '^[H' copilot_zle_help 2>/dev/null || true
-bindkey -M viins '^Xh' copilot_zle_help 2>/dev/null || true
-bindkey -M vicmd '^Xh' copilot_zle_help 2>/dev/null || true
-bindkey -M viins '^XH' copilot_zle_help 2>/dev/null || true
-bindkey -M vicmd '^XH' copilot_zle_help 2>/dev/null || true
-# Ghost-text: right-arrow or Ctrl+F to accept full suggestion
-bindkey '^[OC' _copilot_zle_ghost_accept_full 2>/dev/null || true  # Right arrow
-bindkey '^[[C' _copilot_zle_ghost_accept_full 2>/dev/null || true  # Right arrow (alt)
-bindkey '^F' _copilot_zle_ghost_accept_full 2>/dev/null || true    # Ctrl+F
-# Ghost-text: Ctrl+Right to accept word-by-word
-bindkey '^[[1;5C' _copilot_zle_ghost_accept_word 2>/dev/null || true  # Ctrl+Right
+if [[ -z "${_COPILOT_ZLE_WIDGETS_REGISTERED:-}" ]]; then
+  zle -N copilot_zle_generate
+  zle -N copilot_zle_explain
+  zle -N copilot_zle_help
+  zle -N copilot_zle_handoff_opencode
+  bindkey '^g' copilot_zle_generate
+  bindkey '^e' copilot_zle_explain
+  bindkey '^Xo' copilot_zle_handoff_opencode 2>/dev/null || true
+  bindkey '^XO' copilot_zle_handoff_opencode 2>/dev/null || true
+  bindkey '^[h' copilot_zle_help 2>/dev/null || true
+  bindkey '^[H' copilot_zle_help 2>/dev/null || true
+  bindkey '^Xh' copilot_zle_help 2>/dev/null || true
+  bindkey '^XH' copilot_zle_help 2>/dev/null || true
+  bindkey -M viins '^g' copilot_zle_generate 2>/dev/null || true
+  bindkey -M vicmd '^g' copilot_zle_generate 2>/dev/null || true
+  bindkey -M viins '^e' copilot_zle_explain 2>/dev/null || true
+  bindkey -M vicmd '^e' copilot_zle_explain 2>/dev/null || true
+  bindkey -M viins '^[h' copilot_zle_help 2>/dev/null || true
+  bindkey -M vicmd '^[h' copilot_zle_help 2>/dev/null || true
+  bindkey -M viins '^[H' copilot_zle_help 2>/dev/null || true
+  bindkey -M vicmd '^[H' copilot_zle_help 2>/dev/null || true
+  bindkey -M viins '^Xh' copilot_zle_help 2>/dev/null || true
+  bindkey -M vicmd '^Xh' copilot_zle_help 2>/dev/null || true
+  bindkey -M viins '^XH' copilot_zle_help 2>/dev/null || true
+  bindkey -M vicmd '^XH' copilot_zle_help 2>/dev/null || true
+  bindkey -M viins '^Xo' copilot_zle_handoff_opencode 2>/dev/null || true
+  bindkey -M vicmd '^Xo' copilot_zle_handoff_opencode 2>/dev/null || true
+  bindkey -M viins '^XO' copilot_zle_handoff_opencode 2>/dev/null || true
+  bindkey -M vicmd '^XO' copilot_zle_handoff_opencode 2>/dev/null || true
+  bindkey '^[OC' _copilot_zle_ghost_accept_full 2>/dev/null || true
+  bindkey '^[[C' _copilot_zle_ghost_accept_full 2>/dev/null || true
+  bindkey '^F' _copilot_zle_ghost_accept_full 2>/dev/null || true
+  bindkey '^[[1;5C' _copilot_zle_ghost_accept_word 2>/dev/null || true
+  typeset -g _COPILOT_ZLE_WIDGETS_REGISTERED=1
+fi
