@@ -77,6 +77,7 @@ If you want to use the plugin outside Ghostty too, source `ghostline-zle.zsh` wi
 - `Ctrl+E`: explain the current command
 - `Alt+H`: open the help menu
 - `Ctrl+X H`: open the help menu without Meta-key delay
+- `Ctrl+X O`: hand off the current larger task to `opencode`
 - `Ctrl+X ]` / `Ctrl+X [`: cycle AI command candidates
 - `Right Arrow` or `Ctrl+F`: accept a full ghost suggestion
 - `Ctrl+Right`: accept one ghost-text word
@@ -92,6 +93,8 @@ If you want to use the plugin outside Ghostty too, source `ghostline-zle.zsh` wi
 - **NL detection**: intercept natural language and route it to AI
 - **Autofix**: proactively suggest a fix after command failures
 - **Explain**: show a one-line explanation for the current buffer command
+
+Larger prompts that look more like repo work than one-command work stay buffer-first and offer an `opencode` handoff instead of forcing a slower command-generation attempt.
 
 When a suggestion or autofix flow reacts to a failed command, the status line now shows an explicit failure notice so it is clear why the plugin is preparing a follow-up.
 
@@ -125,7 +128,7 @@ Minimal example:
   },
   "daemon": {
     "enabled": true,
-    "idleTimeoutSec": 300
+    "idleTimeoutSec": 1800
   },
   "suggest": {
     "enabled": false
@@ -150,6 +153,8 @@ Reload behavior:
 - exporting `COPILOT_ZLE_MODEL` affects new requests in the current shell immediately
 - editing `config.json` requires `exec zsh` or re-sourcing the plugin so the shell cache refreshes
 - daemon restart is not required for model changes once the shell has reloaded, because requests now send the model explicitly
+
+The shipped defaults now keep the daemon warm for 30 minutes and keep prompt-memory injection conservative to reduce latency drift.
 
 You can point the plugin at another config with:
 
